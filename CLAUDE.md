@@ -131,10 +131,15 @@ constats y sont numérotés FND-01…
 - **FND-02 + FND-11** (code, fait) : `sanitizeNotesHtml` pour la note d'analyse
   (panneau de détail + journal) ; `esc()` échappe aussi `" '` ; ajout de
   `escJs`/`safeUrl` ; e-mail d'`adminRemove` passé par `escJs`. Banc : 0 fuite XSS.
-- **FND-01** (base, critique) : correctif préparé et vérifié en transaction
-  annulée ; **guide privé remis à Thomas hors dépôt** et script versionné dans
-  `supabase/sql/` **une fois joué** (pas avant — le dépôt est public, on
-  n'y décrit pas une faille ouverte). Détail dans le rapport privé.
+- **FND-01** (base, critique) — **FERMÉE, joué le 18/10/2026 par Thomas.**
+  Déclencheur `protect_users_sensitive_trg` (SECURITY **INVOKER**) `BEFORE UPDATE`
+  sur `public.users` : un membre (`current_user = 'authenticated'`, non
+  super-admin) ne peut plus modifier `is_super_admin`, `workspace_id`, `email`,
+  `auth_user_id`, `id`. Script + STATUT : `supabase/sql/2026-10-18_fnd01_protect_users.sql`.
+  Vérifié en lecture sur la prod (transaction annulée) : tentative d'élévation
+  **refusée `42501`**, modif bénigne (color) passe. Détail dans le rapport privé.
+  ⚠️ Un déclencheur sur `public.users` en **SECURITY DEFINER** ne marcherait pas
+  (`current_user` = propriétaire → garde jamais active) : rester en INVOKER.
 
 ⚠️ **Déploiement** : les assets ne sont pas versionnés (`?v=N`, FND-15) — après
 une mise en ligne, prévoir un cache-bust pour que le nouvel `app.js` soit chargé.
