@@ -33,7 +33,12 @@ modules. Pas d'Edge Function déployée à ce jour.
 ## 2. Filet de sécurité (en place depuis le 18/10/2026)
 
 - `npm test` → `node --test "test/**/*.test.js"` (Node ≥ 20 ; **Node 22 refuse
-  `node --test test/` — il faut le motif glob**). 28 tests, 0 dépendance.
+  `node --test test/` — il faut le motif glob**). 34 tests, 0 dépendance.
+- `test/mini-dom.js` : mini-DOM (DOMParser + createElement + innerHTML
+  parse/serialize avec entités) pour exercer `sanitizeNotesHtml` dans `node:vm`.
+  `getElementById` reste **inerte** (innerHTML = chaîne brute) pour que les
+  gardes lisent le rendu tel quel ; seuls les nœuds `createElement`/`DOMParser`
+  sont « réels ». Le banc Playwright reste la référence pour le rendu.
 - `test/charger-app.js` charge `app.js` dans un contexte `node:vm` avec des
   doublures (document inerte, faux client Supabase, `localStorage`…).
   - **Figer le temps** : `charger({ maintenant: new Date('…') })`.
@@ -45,7 +50,7 @@ modules. Pas d'Edge Function déployée à ce jour.
   - `sansCommentaires()` masque commentaires (pas les chaînes) avant une garde
     qui lit le source ; un **canari** vérifie que le masquage n'efface pas de code.
 - `scripts/muter.py` / `scripts/mutations.py` : réintroduisent chaque défaut et
-  vérifient que la garde **tombe** (19/19 au 18/10/2026).
+  vérifient que la garde **tombe** (24/24 au 18/10/2026).
 - ESLint `no-undef` : sur une **copie** d'`app.js`, globales du navigateur dans
   `globales.json`, avec un **témoin** (variable inexistante → 1 erreur). 0 erreur
   sur `app.js` au 18/10/2026.
@@ -85,6 +90,13 @@ Tables `public` (toutes RLS activée) : `workspaces`, `allowed_emails`, `users`,
 
 ## 5. Pièges connus / faux positifs
 
+- **Échappement** (`test/echappement.test.js`) : tout texte libre dans du HTML
+  passe par `esc()` (échappe `& < > " '`) ; un argument JS dans un `onclick`
+  par `escJs()` (JSON puis HTML) ; une URL de `href` par `safeUrl()`
+  (http/https). **Une note d'analyse de trade est du HTML riche** (éditeur
+  contenteditable) → elle s'affiche par `sanitizeNotesHtml()` (liste blanche de
+  balises + couleurs), **jamais brute** : journal et panneau de détail alignés
+  sur cette fonction (FND-02/11, v=2, 18/10/2026).
 - **Fuseau** : la date du jour se lit en **local** (`fmtYMD`), jamais
   `toISOString().slice(0,10)` (décale la veille la nuit l'été). Gardes :
   `test/dates.test.js` (test posé à Paris, 0 h 30 l'été).
@@ -109,10 +121,20 @@ Tables `public` (toutes RLS activée) : `workspaces`, `allowed_emails`, `users`,
 - Publication minifiée par GitHub Actions + versionnage des assets `?v=N`.
 - Héberger les bibliothèques dans `vendor/` (fin des CDN) + CSP.
 
-## 7. Audit du 18/10/2026
+## 7. Audit du 18/10/2026 + corrections
 
 Rapport complet et priorisé : **remis à Thomas hors dépôt** (il décrit des
 défauts non corrigés ; le dépôt étant public, il n'y est pas versionné). Les
-constats y sont numérotés FND-01…; aucune correction n'a été appliquée au code
-applicatif (accord de Thomas requis). Le **filet de sécurité** de ce commit est,
-lui, additif (tests, outils, doc).
+constats y sont numérotés FND-01…
+
+**v=2 (en cours)** — correctifs de sécurité P0, sur accord de Thomas :
+- **FND-02 + FND-11** (code, fait) : `sanitizeNotesHtml` pour la note d'analyse
+  (panneau de détail + journal) ; `esc()` échappe aussi `" '` ; ajout de
+  `escJs`/`safeUrl` ; e-mail d'`adminRemove` passé par `escJs`. Banc : 0 fuite XSS.
+- **FND-01** (base, critique) : correctif préparé et vérifié en transaction
+  annulée ; **guide privé remis à Thomas hors dépôt** et script versionné dans
+  `supabase/sql/` **une fois joué** (pas avant — le dépôt est public, on
+  n'y décrit pas une faille ouverte). Détail dans le rapport privé.
+
+⚠️ **Déploiement** : les assets ne sont pas versionnés (`?v=N`, FND-15) — après
+une mise en ligne, prévoir un cache-bust pour que le nouvel `app.js` soit chargé.

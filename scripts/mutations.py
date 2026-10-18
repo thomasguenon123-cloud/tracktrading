@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from muter import muter  # noqa: E402
 
 D, S, R, SRC, C = 'test/dates.test.js', 'test/stats.test.js', 'test/rendu.test.js', 'test/source.test.js', 'test/charger.test.js'
+E = 'test/echappement.test.js'
 
 MUTATIONS = [
     # nom, fichier, test, ancien, nouveau
@@ -55,6 +56,20 @@ MUTATIONS = [
      "/* V9.4 — Toolbar flottante */", "/* V9.4 — Toolbar .bd-step*/.bd-link flottante */"),
     ('masquage qui ignore les chaines', 'test/charger-app.js', C,
      "if (c === '\"' || c === \"'\") { chaine(c);", "if (false) { chaine(c);"),
+    # v=2 : FND-02 + FND-11
+    ('esc() n echappe pas les guillemets', 'app.js', E,
+     ".replace(/>/g,'&gt;').replace(/\"/g,'&quot;').replace(/'/g,'&#39;');",
+     ".replace(/>/g,'&gt;');"),
+    ('safeUrl() laisse passer javascript:', 'app.js', E,
+     "return /^https?:\\/\\//i.test(s)?esc(s):'#';", "return esc(s);"),
+    ('note d analyse brute dans le panneau detail', 'app.js', E,
+     'line-height:1.7">${sanitizeNotesHtml(t.analysis_notes)}</div>',
+     'line-height:1.7">${t.analysis_notes}</div>'),
+    ('note d analyse brute dans le journal', 'app.js', E,
+     'line-height:1.7">${sanitizeNotesHtml(t.analysis_notes)}</p>',
+     'line-height:1.7">${t.analysis_notes}</p>'),
+    ('sanitize qui ne retire pas les balises inconnues', 'app.js', E,
+     "if(!ALLOWED_INLINE_TAGS.includes(tag)){", "if(false){"),
 ]
 
 

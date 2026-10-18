@@ -13,6 +13,7 @@
 const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
+const miniDom = require('./mini-dom.js');
 
 const RACINE = path.join(__dirname, '..');
 const SOURCE_APP = fs.readFileSync(path.join(RACINE, 'app.js'), 'utf8');
@@ -148,7 +149,10 @@ function charger({ maintenant, db, html = SOURCE_HTML, source = SOURCE_APP } = {
     body: elementInerte('body', 'body'), head: elementInerte('head', 'head'),
     documentElement: elementInerte('html', 'html'),
     fullscreenElement: null,
-    createElement: (tag) => elementInerte('', tag),
+    // createElement rend un noeud reel (mini-DOM) : sanitizeNotesHtml en a besoin
+    // (DOMParser + createElement('span')). getElementById reste inerte (ci-dessous)
+    // pour que les gardes lisent l'innerHTML tel que le rendu l'ecrit.
+    createElement: (tag) => miniDom.createElement(tag),
     getElementById(id) {
       if (!ids.has(id) && !elements.has(id)) return null;
       if (!elements.has(id)) elements.set(id, elementInerte(id));
@@ -176,6 +180,7 @@ function charger({ maintenant, db, html = SOURCE_HTML, source = SOURCE_APP } = {
     matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
     getComputedStyle: () => ({ getPropertyValue: () => '' }),
     getSelection: () => null,
+    DOMParser: miniDom.DOMParser,
     ResizeObserver: class { observe() {} unobserve() {} disconnect() {} },
     FileReader: class { readAsDataURL() {} },
     fetch: async () => ({ ok: true, json: async () => ({}) }),

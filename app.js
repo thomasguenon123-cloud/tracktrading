@@ -896,7 +896,15 @@ function fDateShort(d){if(!d)return'';return new Date(d).toLocaleDateString('fr-
 // le mois pour Paris (UTC+2 en été) → "MAI 26" renvoyait "2026-04" en interne.
 function fmtYM(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');}
 function fmtYMD(d){return fmtYM(d)+'-'+String(d.getDate()).padStart(2,'0');}
-function esc(s){return(s||'').toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+// FND-11 : on echappe aussi " et ' — un texte utilisateur place dans un attribut
+// (title="...", value="...") ne doit pas pouvoir en sortir.
+function esc(s){return(s==null?'':s).toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
+// Argument JS passe dans un onclick="f(...)" : JSON d'abord (litteral JS valide),
+// puis HTML. S'ecrit SANS guillemets autour : onclick="f(${escJs(x)})".
+// (esc() seul ne suffit pas : &#39; serait redecode avant l'execution du JS.)
+function escJs(s){return esc(JSON.stringify(s==null?'':String(s)));}
+// URL d'un href : http/https uniquement (esc seul laisse passer javascript:).
+function safeUrl(u){const s=(u==null?'':String(u)).trim();return /^https?:\/\//i.test(s)?esc(s):'#';}
 function toast(msg,type='ok'){const t=document.getElementById('toast');t.textContent=msg;t.className='show '+type;clearTimeout(t._t);t._t=setTimeout(()=>t.className='',3400);}
 
 // ─── CONFIRM ───
@@ -1490,7 +1498,7 @@ async function showTradeDetailById(tradeId){
     <!-- ANALYSE -->
     ${t.analysis_notes?`<div style="margin-bottom:14px">
       <div style="font-family:Arial,monospace;font-size:8px;color:var(--amber);letter-spacing:.14em;margin-bottom:6px">▪ ANALYSE</div>
-      <div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;font-size:11px;color:var(--text2);line-height:1.7">${t.analysis_notes}</div>
+      <div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;font-size:11px;color:var(--text2);line-height:1.7">${sanitizeNotesHtml(t.analysis_notes)}</div>
     </div>`:''}
 
     <!-- EXÉCUTION (paramètres) -->
@@ -1759,7 +1767,7 @@ function tradeBlockContent(t){
     <div class="chip-row">
       ${t.session?chip('Session',t.session):''}${t.timeframe?chip('TF',t.timeframe):''}${t.setup_type?chip('Setup',t.setup_type):''}${t.strategy?chip('Stratégie',t.strategy):''}
     </div>
-    ${t.analysis_notes?`<p style="font-size:11px;color:var(--text2);line-height:1.7">${esc(t.analysis_notes).replace(/\n/g,'<br>')}</p>`:'<p style="font-size:10px;color:var(--text3);font-family:Arial,monospace">— Aucune note —</p>'}
+    ${t.analysis_notes?`<p style="font-size:11px;color:var(--text2);line-height:1.7">${sanitizeNotesHtml(t.analysis_notes)}</p>`:'<p style="font-size:10px;color:var(--text3);font-family:Arial,monospace">— Aucune note —</p>'}
   </div>
   <div class="tj-section">
     <div class="tj-section-lbl">Exécution</div>
@@ -3691,7 +3699,7 @@ async function loadAdminUsers() {
         : '<span style="color:var(--text3);font-size:9px">—</span>';
       const canDelete = !u.is_super_admin_user;
       const actions = canDelete
-        ? `<button class="btn btn-red btn-sm" onclick="adminRemove('${esc(u.email)}', ${u.auth_user_id ? `'${u.auth_user_id}'` : 'null'})">🗑 Retirer</button>`
+        ? `<button class="btn btn-red btn-sm" onclick="adminRemove(${escJs(u.email)}, ${u.auth_user_id ? `'${u.auth_user_id}'` : 'null'})">🗑 Retirer</button>`
         : '<span style="color:var(--text3);font-size:9px">Protégé</span>';
       tr.innerHTML = `
         <td><span style="font-family:Arial,monospace;font-size:10px">${esc(u.email)}</span>${u.profile_name ? `<div style="font-size:9px;color:var(--text3);margin-top:2px">${esc(u.profile_name)}</div>` : ''}</td>
