@@ -5,8 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>TrackTrading</title>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=Arial:wght@400;500;600;700&display=swap" rel="stylesheet"/>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<!-- FND-04 : bibliotheques hebergees (vendor/), versions exactes + empreinte SRI.
+     Fini le CDN en version flottante (@2) : une publication cassee cote CDN ne
+     peut plus passer en prod sans test, et un fichier altere est refuse. -->
+<script src="vendor/supabase-js-2.118.0/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK"></script>
+<script src="vendor/chartjs-4.4.1/chart.umd.js" integrity="sha384-dug+JxfBvklEQdJ4AYuBBAIScUz0bVN73xpy273gcAwHjb3qI0fXmuYNaNfdyYJG"></script>
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>

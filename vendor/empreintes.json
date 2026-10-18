@@ -1,0 +1,5 @@
+{
+  "_lisezmoi": "Bibliotheques hebergees (fin des CDN flottants, FND-04). Versions exactes prises sur npm, licence MIT jointe. Les empreintes SRI ci-dessous sont celles des fichiers de ce dossier ET des attributs integrity d'index.html. Une garde de test (test/dependances.test.js) verifie la concordance et refuse toute version flottante. Pour monter de version : npm pack <paquet>@<version exacte>, recalculer l'empreinte (openssl dgst -sha384 -binary <f> | openssl base64 -A), mettre a jour ce fichier ET index.html, puis rejouer le banc.",
+  "vendor/supabase-js-2.118.0/supabase.js": "sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK",
+  "vendor/chartjs-4.4.1/chart.umd.js": "sha384-dug+JxfBvklEQdJ4AYuBBAIScUz0bVN73xpy273gcAwHjb3qI0fXmuYNaNfdyYJG"
+}

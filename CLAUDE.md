@@ -33,7 +33,7 @@ modules. Pas d'Edge Function déployée à ce jour.
 ## 2. Filet de sécurité (en place depuis le 18/10/2026)
 
 - `npm test` → `node --test "test/**/*.test.js"` (Node ≥ 20 ; **Node 22 refuse
-  `node --test test/` — il faut le motif glob**). 34 tests, 0 dépendance.
+  `node --test test/` — il faut le motif glob**). 38 tests, 0 dépendance.
 - `test/mini-dom.js` : mini-DOM (DOMParser + createElement + innerHTML
   parse/serialize avec entités) pour exercer `sanitizeNotesHtml` dans `node:vm`.
   `getElementById` reste **inerte** (innerHTML = chaîne brute) pour que les
@@ -50,7 +50,7 @@ modules. Pas d'Edge Function déployée à ce jour.
   - `sansCommentaires()` masque commentaires (pas les chaînes) avant une garde
     qui lit le source ; un **canari** vérifie que le masquage n'efface pas de code.
 - `scripts/muter.py` / `scripts/mutations.py` : réintroduisent chaque défaut et
-  vérifient que la garde **tombe** (24/24 au 18/10/2026).
+  vérifient que la garde **tombe** (27/27 au 18/10/2026).
 - ESLint `no-undef` : sur une **copie** d'`app.js`, globales du navigateur dans
   `globales.json`, avec un **témoin** (variable inexistante → 1 erreur). 0 erreur
   sur `app.js` au 18/10/2026.
@@ -119,7 +119,8 @@ Tables `public` (toutes RLS activée) : `workspaces`, `allowed_emails`, `users`,
   vécu dans l'historique ; retirées du code actuel, **toujours dans l'historique**.
 - Découpage éventuel d'`app.js` (3 760 lignes) : décision d'architecture.
 - Publication minifiée par GitHub Actions + versionnage des assets `?v=N`.
-- Héberger les bibliothèques dans `vendor/` (fin des CDN) + CSP.
+- **CSP** (politique de sécurité du contenu) en balise meta, une fois les
+  bibliothèques hébergées (fait pour supabase-js + Chart.js) et la police réglée.
 
 ## 7. Audit du 18/10/2026 + corrections
 
@@ -140,6 +141,16 @@ constats y sont numérotés FND-01…
   **refusée `42501`**, modif bénigne (color) passe. Détail dans le rapport privé.
   ⚠️ Un déclencheur sur `public.users` en **SECURITY DEFINER** ne marcherait pas
   (`current_user` = propriétaire → garde jamais active) : rester en INVOKER.
+
+**v=3 (en cours)** — secrets & dépendances :
+- **FND-04** (code, fait) : supabase-js (2.118.0) et Chart.js (4.4.1) **hébergés
+  dans `vendor/`** avec empreinte **SRI**, fin du CDN flottant. `vendor/empreintes.json`
+  + garde `test/dependances.test.js` (refuse tout CDN / version flottante, vérifie
+  empreintes ↔ fichiers ↔ `index.html`). `@2` résolvait déjà vers 2.118.0 →
+  aucun changement de comportement. (La police Google reste à régler, FND-12, v=6.)
+- **FND-03** (clé tierce dans l'historique git public) : à **renouveler chez le
+  fournisseur** par Thomas (action hors dépôt). La clé n'est plus utilisée par le
+  code (section Macro en données figées), mais peut rester valide chez le fournisseur.
 
 ⚠️ **Déploiement** : les assets ne sont pas versionnés (`?v=N`, FND-15) — après
 une mise en ligne, prévoir un cache-bust pour que le nouvel `app.js` soit chargé.

@@ -10,6 +10,7 @@ from muter import muter  # noqa: E402
 
 D, S, R, SRC, C = 'test/dates.test.js', 'test/stats.test.js', 'test/rendu.test.js', 'test/source.test.js', 'test/charger.test.js'
 E = 'test/echappement.test.js'
+DEP = 'test/dependances.test.js'
 
 MUTATIONS = [
     # nom, fichier, test, ancien, nouveau
@@ -70,6 +71,15 @@ MUTATIONS = [
      'line-height:1.7">${t.analysis_notes}</p>'),
     ('sanitize qui ne retire pas les balises inconnues', 'app.js', E,
      "if(!ALLOWED_INLINE_TAGS.includes(tag)){", "if(false){"),
+    # v=3 : FND-04
+    ('CDN flottant reintroduit dans index.html', 'index.html', DEP,
+     '<script src="vendor/supabase-js-2.118.0/supabase.js"',
+     '<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"'),
+    ('empreinte integrity retiree', 'index.html', DEP,
+     ' integrity="sha384-dug+JxfBvklEQdJ4AYuBBAIScUz0bVN73xpy273gcAwHjb3qI0fXmuYNaNfdyYJG"', ''),
+    ('empreinte json obsolete', 'vendor/empreintes.json', DEP,
+     'sha384-dug+JxfBvklEQdJ4AYuBBAIScUz0bVN73xpy273gcAwHjb3qI0fXmuYNaNfdyYJG',
+     'sha384-OBSOLETE0000000000000000000000000000000000000000000000000000'),
 ]
 
 
