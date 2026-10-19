@@ -33,7 +33,7 @@ modules. Pas d'Edge Function déployée à ce jour.
 ## 2. Filet de sécurité (en place depuis le 18/10/2026)
 
 - `npm test` → `node --test "test/**/*.test.js"` (Node ≥ 20 ; **Node 22 refuse
-  `node --test test/` — il faut le motif glob**). 38 tests, 0 dépendance.
+  `node --test test/` — il faut le motif glob**). 62 tests (19/10/2026), 0 dépendance.
 - `test/mini-dom.js` : mini-DOM (DOMParser + createElement + innerHTML
   parse/serialize avec entités) pour exercer `sanitizeNotesHtml` dans `node:vm`.
   `getElementById` reste **inerte** (innerHTML = chaîne brute) pour que les
@@ -49,17 +49,36 @@ modules. Pas d'Edge Function déployée à ce jour.
     avec un **témoin positif** (un rendu vide ne doit pas passer).
   - `sansCommentaires()` masque commentaires (pas les chaînes) avant une garde
     qui lit le source ; un **canari** vérifie que le masquage n'efface pas de code.
+  - Options v=5 : `sansChart` (Chart.js absent, le test simule l'arrivée du
+    fichier via `onload` du `<script>` ajouté à `document.head`), `muet` (console
+    capturée dans `ctx.__console`), `minuteriesImmediates` (sinon `setTimeout` ne
+    s'exécute jamais). Le faux stockage note `db.signatures` (lots
+    `createSignedUrls`) et `db.unitaires` (`createSignedUrl`).
+  - **Vagues de requêtes** (`test/demarrage.test.js`) : base « à guichet » — chaque
+    requête reste en vol jusqu'à ce que le test la serve ; une vague = les requêtes
+    en vol ensemble.
 - `scripts/muter.py` / `scripts/mutations.py` : réintroduisent chaque défaut et
-  vérifient que la garde **tombe** (27/27 au 18/10/2026).
+  vérifient que la garde **tombe** (58/58 au 19/10/2026).
 - ESLint `no-undef` : sur une **copie** d'`app.js`, globales du navigateur dans
   `globales.json`, avec un **témoin** (variable inexistante → 1 erreur). 0 erreur
-  sur `app.js` au 18/10/2026.
-- `scripts/banc/` : banc Playwright (Chromium pré-installé). supabase-js est
-  **substitué avant `app.js`** (`faux-supabase.js`), les `integrity` sont retirés,
-  Chart.js servi vrai. Balayages : clics de chaque écran, XSS de tous les champs
-  libres (marqueur **inerte** `<tt-xss>`, aucun script), débordement iPhone
-  390 px / iPad 820 px. `BANC_VENDOR` pointe le dossier contenant
-  `package/dist/chart.umd.js` (obtenu par `npm pack chart.js@4.4.1`).
+  sur `app.js` au 19/10/2026.
+- `scripts/banc/` : banc Playwright (Chromium pré-installé), socle commun
+  `commun.js`. supabase-js est **substitué avant `app.js`** (`faux-supabase.js`,
+  latence simulée par requête), les `integrity` d'`index.html` sont retirés,
+  Chart.js servi vrai. Fuseau **Europe/Paris** et `fr-FR` (navigateur ET
+  générateur de données : sinon, entre 0 h et 2 h l'été, ils ne sont pas sur le
+  même jour).
+  - `npm run banc` : clics de chaque écran, XSS de tous les champs libres
+    (marqueur **inerte** `<tt-xss>`, aucun script), débordement iPhone 390 px /
+    iPad 820 px. **Échoue** sur erreur de page, fuite XSS **ou débordement**.
+  - `npm run mesures` : chargement en « 4G lente » simulée (déconnecté : premier
+    affichage, formulaire visible/utilisable ; connecté : 1er écran, tableau de
+    bord prêt, requêtes et **vagues**), iPhone/iPad **tactiles** (débordement et
+    coupables, cibles < 40 px, bouton visible au survol seul), captures iPhone.
+    Variables : `BANC_RACINE` (autre version à comparer, ex. un `git worktree`),
+    `BANC_SORTIE`, `BANC_PREFIXE`, `BANC_REPETITIONS` (médiane de N mesures).
+  - `BANC_VENDOR` pointe le dossier contenant `package/dist/chart.umd.js` si
+    `vendor/` est absent (obtenu par `npm pack chart.js@4.4.1`).
 
 ## 3. Schéma (Supabase) — repères
 
@@ -111,6 +130,32 @@ Tables `public` (toutes RLS activée) : `workspaces`, `allowed_emails`, `users`,
   Le vrai rempart est la RLS (scopée par workspace : OK).
 - Node 22 : `node --test test/` échoue (« Cannot find module .../test ») →
   utiliser le motif glob (déjà dans `package.json`).
+- **Démarrage (v=5)** : `index.html` charge supabase-js puis `app.js`, **tous deux
+  en `defer`** (un seul des deux en defer = `app.js` s'exécute avant supabase-js).
+  Le petit script de tête pose `html.demarrage` (écran « Chargement de ton
+  espace… ») si la clé de session de supabase-js existe :
+  `sb-<ref du projet>-auth-token` — à changer avec `SB_URL`. `app.js` retire
+  toujours la classe (`afficherChargement(false)` : app prête, pas de session,
+  échec). Chart.js n'est plus dans `index.html` : `chargerBiblio('chart')`
+  (BIBLIOS, même empreinte que `vendor/empreintes.json`) et `grapheDisponible()`
+  avant tout `new Chart`. Liens de fichiers : `signerChemins()` (un seul
+  `createSignedUrls` par écran) ; `createSignedUrl` unitaire réservé à UN fichier
+  qu'on vient de déposer ou de recevoir en temps réel.
+- **Rapports** : le rapport de la semaine ne se charge plus au démarrage, mais au
+  clic sur l'onglet (la présence « qui édite » ne liste donc que ceux qui ont
+  ouvert Rapports).
+- **Mobile (v=5)** : la mise en page des grands blocs (`#dash-main`,
+  `#dash-top-row`, `#cur-single-view`, `#macro-content`, `#cal-content`) vit dans
+  `styles.css`, **jamais en style en ligne** (un style en ligne bat toute media
+  query). Seuils : 1000 px (onglets sur une 2e ligne qui défile,
+  `--hdr-extra`), 760 px (téléphone : blocs empilés), 600 px (fiche trade plein
+  écran) ; `(pointer:coarse)` cibles ≥ 40 px et champs à 16 px (iOS zoome en
+  dessous) ; `(hover:none)` « Supprimer » une capture toujours visible. Le
+  bureau (> 1000 px, souris) n'a pas bougé : boîtes identiques à 1100/1280/1920 px.
+- **Cache (v=5)** : `app.js` et `styles.css` sont appelés avec `?v=N` dans
+  `index.html`. **À chaque version qui change l'un d'eux, incrémenter N** : sinon
+  un navigateur peut garder l'ancien fichier (GitHub Pages : 10 min de cache)
+  avec le nouvel `index.html`.
 
 ## 6. Décisions ouvertes (à poser à Thomas, pas à trancher)
 
@@ -118,9 +163,11 @@ Tables `public` (toutes RLS activée) : `workspaces`, `allowed_emails`, `users`,
   clé d'API tierce (fournisseur de cotations) et une adresse personnelle ont
   vécu dans l'historique ; retirées du code actuel, **toujours dans l'historique**.
 - Découpage éventuel d'`app.js` (3 760 lignes) : décision d'architecture.
-- Publication minifiée par GitHub Actions + versionnage des assets `?v=N`.
-- **CSP** (politique de sécurité du contenu) en balise meta, une fois les
-  bibliothèques hébergées (fait pour supabase-js + Chart.js) et la police réglée.
+- Publication minifiée par GitHub Actions + versionnage **automatique** des
+  assets (`?v=N` est aujourd'hui manuel, voir §5).
+- **CSP** (politique de sécurité du contenu) en balise meta : bibliothèques
+  hébergées et police retirée (fait). Il faudra autoriser le script de tête
+  d'`index.html` par son empreinte (`'sha256-…'`) et traiter les `onclick=` en ligne.
 
 ## 7. Audit du 18/10/2026 + corrections
 
@@ -147,10 +194,29 @@ constats y sont numérotés FND-01…
   dans `vendor/`** avec empreinte **SRI**, fin du CDN flottant. `vendor/empreintes.json`
   + garde `test/dependances.test.js` (refuse tout CDN / version flottante, vérifie
   empreintes ↔ fichiers ↔ `index.html`). `@2` résolvait déjà vers 2.118.0 →
-  aucun changement de comportement. (La police Google reste à régler, FND-12, v=6.)
+  aucun changement de comportement. (Police Google : retirée en v=5, FND-12.)
 - **FND-03** (clé tierce dans l'historique git public) : à **renouveler chez le
   fournisseur** par Thomas (action hors dépôt). La clé n'est plus utilisée par le
   code (section Macro en données figées), mais peut rester valide chez le fournisseur.
 
-⚠️ **Déploiement** : les assets ne sont pas versionnés (`?v=N`, FND-15) — après
-une mise en ligne, prévoir un cache-bust pour que le nouvel `app.js` soit chargé.
+**v=5 (19/10/2026, en attente de publication)** — mobile + démarrage, sur accord
+de Thomas (plan du rapport UX v1, remis hors dépôt comme le v2) :
+- **Démarrage** : requêtes en vagues parallèles (`postLogin` : whitelist + thème +
+  migration ensemble ; `initApp` : traders + comptes + profil + trades ensemble),
+  écran « Chargement de ton espace… », Chart.js à la demande (FND-13), police
+  Google retirée (FND-12), liens signés groupés (FND-16), rapport de la semaine
+  chargé à l'ouverture de Rapports, `?v=5` (FND-15).
+- **Mobile** (FND-09) : en-tête sur 2 lignes sous 1000 px, blocs empilés sous
+  760 px, fiche trade plein écran sous 600 px, panneau de détail ≤ largeur
+  d'écran, cibles tactiles ≥ 40 px, champs à 16 px, « Supprimer » une capture
+  visible au doigt, bouton plein écran masqué sur téléphone.
+- **Mesuré** (banc, 4G lente simulée, médiane de 5) : formulaire visible
+  772 → 464 ms ; tableau de bord prêt 2 055 → 1 352 ms ; 11 requêtes en 8 vagues
+  → 9 en 4 ; débordement 9/9 → 0/9 vues (iPhone et iPad) ; cibles < 40 px
+  186/264 → 0/256. Bureau : boîtes identiques à 1100/1280/1440/1920 px.
+- Restent (rapport UX v2) : FND-10/UX-05 indicateurs, UX-03 macro datée,
+  sélection de plusieurs mois au doigt, message « aucun workspace », etc.
+
+⚠️ **Déploiement** : rien côté Supabase pour la v=5. Assets versionnés `?v=5`
+(garde dans `test/dependances.test.js`) : **incrémenter N** à la prochaine version
+qui modifie `app.js` ou `styles.css`.

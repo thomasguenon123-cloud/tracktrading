@@ -36,6 +36,9 @@
   --font-mono:Arial, monospace;
   --shadow:   0 2px 12px rgba(0,0,0,.5);
   --shadow2:  0 4px 24px rgba(0,0,0,.7);
+  /* v=5 : hauteur ajoutée à l'en-tête quand la navigation passe sur une 2e ligne
+     (écrans étroits, voir section MOBILE) ; les hauteurs « plein écran » la retirent. */
+  --hdr-extra: 0px;
 }
 [data-theme="light"] {
   --bg:      #f0f2f5;
@@ -73,7 +76,9 @@
 /* ═══ RESET ═══ */
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 html{height:100%}
-body{background:var(--bg);color:var(--text);font-family:Arial,sans-serif;font-size:12px;min-height:100vh;overflow-x:hidden;-webkit-font-smoothing:antialiased;}
+/* v=5 : clip (et non plus hidden seul) — filet de secours, pas une correction :
+   un débordement se corrige à la source (section MOBILE en fin de fichier). */
+body{background:var(--bg);color:var(--text);font-family:Arial,sans-serif;font-size:12px;min-height:100vh;overflow-x:hidden;overflow-x:clip;-webkit-font-smoothing:antialiased;}
 ::-webkit-scrollbar{width:4px;height:4px}
 ::-webkit-scrollbar-track{background:var(--bg)}
 ::-webkit-scrollbar-thumb{background:var(--bg5);border-radius:2px}
@@ -149,6 +154,16 @@ input,select,textarea,button{font-family:inherit}
   border-top-color:#000;border-radius:50%;animation:authSpin .6s linear infinite;
 }
 @keyframes authSpin{to{transform:rotate(360deg)}}
+
+/* v=5 — Écran d'attente du démarrage : html.demarrage (posé par index.html si une
+   session est mémorisée, retiré par app.js) remplace le formulaire de connexion. */
+#ecran-chargement{display:none;flex-direction:column;align-items:center;gap:14px;text-align:center;}
+html.demarrage #ecran-chargement{display:flex;}
+html.demarrage .auth-card{display:none;}
+.ec-spin{width:22px;height:22px;border:2px solid var(--border2);border-top-color:var(--amber);border-radius:50%;animation:sp .7s linear infinite;}
+.ec-texte{font-family:Arial,monospace;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--text2);}
+.ec-aide{max-width:260px;font-size:11px;line-height:1.5;color:var(--text3);opacity:0;animation:ecAide .3s ease 8s forwards;}
+@keyframes ecAide{to{opacity:1}}
 
 /* ═══ HEADER ═══ */
 #hdr {
@@ -436,6 +451,9 @@ input,select,textarea,button{font-family:inherit}
   font-size:11px;color:var(--text);
 }
 .admin-table tr:last-child td{border-bottom:none;}
+/* v=5 : la table défile dans son cadre sur petit écran (au lieu d'élargir la page) */
+.admin-table-wrap{margin:0 14px 14px;overflow-x:auto;}
+.admin-table-wrap .admin-table{margin:0;width:100%;}
 .admin-table tr:hover td{background:var(--bg3);}
 .admin-status-pill{
   display:inline-block;padding:2px 8px;border-radius:10px;
@@ -501,9 +519,10 @@ input,select,textarea,button{font-family:inherit}
 .cur-left-top{display:flex;align-items:center;gap:8px;margin-bottom:4px;}
 
 /* ═══ RAPPORTS SINGLE VIEW ═══ */
+/* v=5 : hauteur reprise de l'ancien style inline d'index.html (valeur effective) */
 #cur-single-view{
   display:flex;flex-direction:column;
-  height:calc(100vh - 195px);min-height:450px;
+  height:calc(100vh - 150px - var(--hdr-extra));min-height:400px;
 }
 .cur-single-card{
   display:flex;flex-direction:row;
@@ -903,6 +922,10 @@ body.dash-dragging-h{cursor:row-resize !important;user-select:none;-webkit-user-
    ═══════════════════════════════════════════════════════════════════ */
 
 /* ═══ CALENDRIER ÉCONOMIQUE ═══ */
+/* v=5 : styles sortis d'index.html (mêmes valeurs) pour s'adapter au mobile */
+#cal-content{width:100%;height:calc(100vh - 158px - var(--hdr-extra));position:relative;}
+#macro-content{padding:18px 20px;overflow-y:auto;height:calc(100vh - 210px - var(--hdr-extra));}
+.barre-outils-droite{margin-left:auto;display:flex;align-items:center;gap:10px;}
 .cal-day-group{margin-bottom:16px;}
 .cal-day-header{
   font-family:Arial,monospace;font-size:9px;letter-spacing:.14em;text-transform:uppercase;
@@ -971,8 +994,22 @@ body.dash-dragging-h{cursor:row-resize !important;user-select:none;-webkit-user-
 
 
 /* ═══ NOUVEAU LAYOUT DASHBOARD ═══ */
+/* v=5 : grille sortie du style inline d'index.html (mêmes valeurs) pour pouvoir
+   l'empiler sur téléphone ; le !important d'origine n'a plus lieu d'être. */
 #dash-main {
-  height: calc(100vh - 115px) !important;
+  display: grid;
+  grid-template-columns: 1fr;
+  grid-template-rows: var(--dash-top-h,45%) 5px 1fr;
+  height: calc(100vh - 115px - var(--hdr-extra));
+  background: var(--border);
+  overflow: hidden;
+}
+#dash-top-row {
+  grid-row: 1/2;
+  display: grid;
+  grid-template-columns: var(--dash-left-w,38%) 5px 1fr;
+  min-height: 0;
+  background: var(--border);
 }
 #stats-panel {
   padding: 18px 16px;
@@ -1106,4 +1143,102 @@ body.dash-dragging-h{cursor:row-resize !important;user-select:none;-webkit-user-
 .workspace-pill.shared{
   background:rgba(0,214,143,.12);color:var(--green);
   border-color:rgba(0,214,143,.3);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   v=5 — MOBILE & TACTILE (iPhone 390 px, iPad 820 px, écrans étroits)
+   Principe : corriger chaque débordement à sa source (banc : npm run mesures),
+   jamais le masquer. Le bureau (> 1000 px, souris) n'est pas modifié.
+   ═══════════════════════════════════════════════════════════════════ */
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%;}
+
+/* En-tête : sous ~1000 px, logo + actions sur une ligne, onglets sur une 2e
+   ligne qui défile horizontalement (l'onglet choisi reste visible, app.js). */
+@media (max-width:1000px){
+  :root{--hdr-extra:41px;}
+  #hdr{flex-wrap:wrap;height:auto;padding:0 10px;}
+  .hdr-left{display:contents;}
+  .logo{order:1;height:40px;display:flex;align-items:center;padding-right:0;border-right:none;}
+  .hdr-right{order:2;margin-left:auto;min-width:0;}
+  .nav{order:3;flex:0 0 calc(100% + 20px);margin:0 -10px -2px;padding:0 4px;
+    border-top:1px solid var(--border);overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none;}
+  .nav::-webkit-scrollbar{display:none;}
+  .nav-tab{flex-shrink:0;margin-bottom:0;}
+}
+
+/* Téléphone */
+@media (max-width:760px){
+  #fullscreen-btn{display:none;} /* API plein écran absente sur iPhone */
+  #uname{display:none;}          /* l'avatar suffit ; l'e-mail est dans le menu */
+  .workspace-badge{min-width:0;}
+  .workspace-badge .ws-name{max-width:90px;}
+
+  /* Tableau de bord : panneaux empilés, séparateurs (souris) masqués */
+  #dash-main{display:flex;flex-direction:column;height:auto;overflow:visible;gap:1px;}
+  #dash-top-row{display:flex;flex-direction:column;gap:1px;}
+  .dash-splitter{display:none;}
+  #stats-panel{border-right:none;}
+  #rr-panel,#bal-panel{height:300px;}
+
+  /* Rapports : notes puis captures, l'une sous l'autre */
+  #cur-single-view{height:auto;min-height:0;}
+  .cur-single-card{flex-direction:column;height:auto;overflow:visible;}
+  .cur-divider{display:none;}
+  .cur-single-left{min-width:0;padding:14px;border-right:none;border-bottom:1px solid var(--border);overflow:visible;}
+  /* !important : largeur posée en ligne par le glisser-redimensionner (bureau) */
+  .cur-single-right{width:auto !important;min-width:0;overflow:visible;}
+  .cur-left-header{flex-wrap:wrap;gap:10px;}
+  .cur-notes-rich{min-height:180px;}
+  .cur-img-block{min-height:260px;}
+  .bilan-card{height:auto;overflow:visible;padding:12px;}
+  .bilan-notes-wrap{flex:none;min-height:180px;max-height:none;}
+
+  /* Calendrier et Macro : barres d'outils qui passent à la ligne */
+  .barre-outils-droite{margin-left:0;flex-wrap:wrap;}
+  #cal-content{height:70vh;min-height:420px;}
+  #macro-content{height:auto;overflow:visible;padding:14px;}
+
+  /* Admin : choix d'espace sur plusieurs lignes, table qui défile dans son cadre */
+  .workspace-radio-row{flex-wrap:wrap;}
+  .workspace-radio-row label{flex:1 1 0;min-width:0;} /* le texte passe à la ligne à côté du bouton */
+  .workspace-select{flex:1 1 100%;min-width:0;}
+  .admin-table{min-width:640px;}
+}
+
+/* Petit téléphone : fiche trade plein écran, boutons d'action toujours visibles */
+@media (max-width:600px){
+  .overlay{padding:0;align-items:stretch;}
+  .modal{max-width:none;max-height:none;height:100%;border-radius:0;border-left:none;border-right:none;
+    display:flex;flex-direction:column;}
+  .modal-body{flex:1 0 auto;}
+  .modal-footer{position:sticky;bottom:0;z-index:1;background:var(--bg2);}
+  .g3{grid-template-columns:minmax(0,1fr) minmax(0,1fr);}
+  .modal-tab{flex:1;text-align:center;padding:10px 6px;}
+  .j-filters{width:100%;}
+  .search-inp{flex:1 1 100%;width:100%;}
+  .f-sel{flex:1 1 auto;}
+}
+
+/* Écran tactile : cibles d'au moins 40 px, et pas de zoom automatique d'iOS au
+   focus d'un champ (il zoome sous 16 px). */
+@media (pointer:coarse){
+  .btn,.acc-tab,.hdr-btn,.user-btn,.workspace-badge,.f-sel,.f-select,.f-inp,.search-inp,
+  .modal-tab,.user-menu-item,.auth-tab,.auth-input,.auth-btn,
+  #rpt-month-pick,#rpt-week,#dash-year-pick,#cal-tz-pick,.workspace-select,
+  #sec-currency select{min-height:40px;}
+  .btn{min-width:40px;justify-content:center;}
+  .hdr-btn,.modal-close,.tjp-fermer{min-width:40px;min-height:40px;}
+  #cal-tz-hint a{display:inline-flex;align-items:center;min-height:40px;}
+  .workspace-radio-row label{display:inline-flex;align-items:center;min-height:40px;}
+  .workspace-radio-row input[type="radio"]{width:20px;height:20px;}
+  #format-toolbar button{width:40px;height:40px;}
+  input:not([type=checkbox]):not([type=radio]):not([type=range]),select,textarea,
+  [contenteditable="true"]{font-size:16px;}
+}
+
+/* Sans survol (tactile) : « Supprimer » une capture est toujours visible sur une
+   zone qui a une image (avant : au survol de la souris seulement → impossible). */
+@media (hover:none){
+  .cur-paste-zone.has-img .cur-paste-rm,
+  .cur-paste-zone-v2.has-img .cur-paste-rm{display:block;min-height:40px;padding:8px 12px;font-size:12px;}
 }

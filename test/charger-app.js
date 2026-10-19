@@ -97,8 +97,12 @@ function faireDb({ reponses = {}, appels = [] } = {}) {
   const canal = new Proxy({}, {
     get: (_, k) => (k === 'presenceState' ? () => ({}) : () => canal),
   });
+  // Liens signes : chaque appel est note (signatures = lots groupes, unitaires =
+  // un fichier). Un chemin contenant « refuse » echoue, comme un fichier sans droit.
+  const signatures = [];
+  const unitaires = [];
   return {
-    appels,
+    appels, signatures, unitaires,
     from: (t) => requete(t, 'table'),
     rpc: (f) => requete(f, 'rpc'),
     channel: () => canal,
@@ -107,7 +111,19 @@ function faireDb({ reponses = {}, appels = [] } = {}) {
       from: () => ({
         upload: async () => ({ data: {}, error: null }),
         remove: async () => ({ data: [], error: null }),
-        createSignedUrl: async () => ({ data: { signedUrl: 'https://exemple.invalid/signe' }, error: null }),
+        createSignedUrl: async (chemin) => {
+          unitaires.push(chemin);
+          return { data: { signedUrl: 'https://exemple.invalid/signe' }, error: null };
+        },
+        createSignedUrls: async (chemins) => {
+          signatures.push([...chemins]);
+          return {
+            data: chemins.map((p) => (p.includes('refuse')
+              ? { path: p, signedURL: null, signedUrl: null, error: 'Either the object does not exist or you do not have access to it' }
+              : { path: p, signedURL: '/s/' + p, signedUrl: 'https://exemple.invalid/signe/' + p, error: null })),
+            error: null,
+          };
+        },
       }),
     },
     auth: {
@@ -134,7 +150,12 @@ class ChartFactice {
 ChartFactice.instances = [];
 
 // source : permet de charger une variante d'app.js (canari du masquage, mutations).
-function charger({ maintenant, db, html = SOURCE_HTML, source = SOURCE_APP } = {}) {
+// sansChart : Chart.js absent au depart, comme dans le navigateur depuis la v=5
+// (charge a la demande par chargerBiblio ; le test simule l'arrivee du fichier).
+// muet : la console de l'app est capturee dans ctx.__console (un test qui passe
+// n'affiche pas d'erreur attendue). minuteriesImmediates : setTimeout s'execute
+// au tour suivant (sinon il ne s'execute jamais).
+function charger({ maintenant, db, html = SOURCE_HTML, source = SOURCE_APP, sansChart = false, muet = false, minuteriesImmediates = false } = {}) {
   const D = Date;
   const DateFigee = maintenant
     ? new Proxy(D, {
@@ -168,15 +189,18 @@ function charger({ maintenant, db, html = SOURCE_HTML, source = SOURCE_APP } = {
     setItem: (k, v) => memoire.set(k, String(v)), removeItem: (k) => memoire.delete(k),
   };
   const client = db || faireDb();
+  const journal = [];
+  const consoleMuette = Object.fromEntries(['log', 'info', 'warn', 'error', 'debug'].map((n) => [n, (...a) => journal.push([n, ...a])]));
   const ctx = {
-    console, Date: DateFigee, Intl,
-    setTimeout: () => 0, clearTimeout() {}, setInterval: () => 0, clearInterval() {},
+    console: muet ? consoleMuette : console, Date: DateFigee, Intl,
+    setTimeout: minuteriesImmediates ? (f) => { setImmediate(f); return 1; } : () => 0,
+    clearTimeout() {}, setInterval: () => 0, clearInterval() {},
     queueMicrotask,
     document, localStorage,
     location: { href: 'https://exemple.invalid/tracktrading/', hash: '', search: '', origin: 'https://exemple.invalid', pathname: '/tracktrading/', reload() {} },
     navigator: { userAgent: 'test' },
     supabase: { createClient: () => client },
-    Chart: ChartFactice,
+    ...(sansChart ? {} : { Chart: ChartFactice }),
     matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
     getComputedStyle: () => ({ getPropertyValue: () => '' }),
     getSelection: () => null,
@@ -192,6 +216,7 @@ function charger({ maintenant, db, html = SOURCE_HTML, source = SOURCE_APP } = {
   vm.createContext(ctx);
   vm.runInContext(source, ctx, { filename: 'app.js' });
   ctx.__db = client;
+  ctx.__console = journal;
   ctx.__el = (id) => document.getElementById(id);
   ctx.__creer = (id) => { const el = elementInerte(id); elements.set(id, el); return el; };
   return ctx;

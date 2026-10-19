@@ -69,7 +69,11 @@ function donnees({ piege } = {}) {
       { id: 'e3', report_id: 'cr1', currency: 'BILAN', bias: null, notes: 'Semaine calme' },
     ],
     currency_report_images: [{ id: 'ci1', entry_id: 'e1', image_type: 'pm', storage_path: 'currency/cr1/USD/pm_1.png', filename: t('currency_report_images.filename', 'pm.png'), created_at: semaine + 'T10:00:00Z' }],
-    user_preferences: [],
+    // Préférences déjà migrées (état réel des comptes existants) : pas d'écriture au démarrage.
+    user_preferences: [
+      { auth_user_id: 'auth-trader', theme: 'dark', extra: { migrated_v8: true } },
+      { auth_user_id: 'auth-admin', theme: 'dark', extra: { migrated_v8: true } },
+    ],
   };
 }
 

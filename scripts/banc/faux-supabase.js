@@ -17,6 +17,14 @@
   let session = window.__SESSION || null;
   const PNG = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="40" height="30"><rect width="40" height="30" fill="#4da6ff"/></svg>');
 
+  // Un appel réseau simulé : window.__LATENCE_MS par aller-retour (0 par défaut),
+  // relevé dans window.__requetes { quoi, t0, t1 } pour mesurer le démarrage.
+  function reseau(quoi) {
+    const t0 = performance.now();
+    return new Promise((r) => setTimeout(r, window.__LATENCE_MS || 0)).then(() => {
+      (window.__requetes = window.__requetes || []).push({ quoi, t0, t1: performance.now() });
+    });
+  }
   function table(nom) { return (D[nom] = D[nom] || []); }
   function uid() { return 'id-' + Math.random().toString(36).slice(2, 10); }
   function maintenant() { return new Date().toISOString(); }
@@ -110,7 +118,7 @@
       limit() { return api; }, range() { return api; },
       maybeSingle() { q.unique = 'peut'; return api; },
       single() { q.unique = 'doit'; return api; },
-      then(ok, ko) { return Promise.resolve().then(executer).then(ok, ko); },
+      then(ok, ko) { return reseau(nom + ':' + q.op).then(executer).then(ok, ko); },
     };
     function executer() {
       const L = table(nom);
@@ -208,21 +216,22 @@
     createClient() {
       return {
         from: requete,
-        rpc: (f, p) => Promise.resolve(RPC[f] ? RPC[f](p || {}) : erreur('PGRST202', 'function not found: ' + f)),
+        rpc: (f, p) => reseau('rpc:' + f).then(() => (RPC[f] ? RPC[f](p || {}) : erreur('PGRST202', 'function not found: ' + f))),
         channel: canal,
         removeChannel() {},
         storage: { from: () => ({
-          upload: async (chemin) => { window.__appels.push({ stockage: 'upload', chemin }); return { data: { path: chemin }, error: null }; },
-          remove: async (chemins) => { window.__appels.push({ stockage: 'remove', chemins }); return { data: [], error: null }; },
-          createSignedUrl: async () => ({ data: { signedUrl: PNG }, error: null }),
-          createSignedUrls: async (cs) => ({ data: cs.map(() => ({ signedUrl: PNG })), error: null }),
+          upload: async (chemin) => { await reseau('storage:upload'); window.__appels.push({ stockage: 'upload', chemin }); return { data: { path: chemin }, error: null }; },
+          remove: async (chemins) => { await reseau('storage:remove'); window.__appels.push({ stockage: 'remove', chemins }); return { data: [], error: null }; },
+          createSignedUrl: async () => { await reseau('storage:signe1'); return { data: { signedUrl: PNG }, error: null }; },
+          createSignedUrls: async (cs) => { await reseau('storage:signeN'); return { data: cs.map((p) => ({ path: p, signedUrl: PNG, error: null })), error: null }; },
         }) },
         auth: {
-          getSession: async () => ({ data: { session }, error: null }),
-          getUser: async () => ({ data: { user: utilisateurCourant() }, error: null }),
+          getSession: async () => ({ data: { session }, error: null }), // local : pas de réseau
+          getUser: async () => { await reseau('auth:getUser'); return { data: { user: utilisateurCourant() }, error: null }; },
           onAuthStateChange(f) { ecouteursAuth.push(f); return { data: { subscription: { unsubscribe() {} } } }; },
           async signOut() { session = null; window.__deconnexions = (window.__deconnexions || 0) + 1; ecouteursAuth.forEach((f) => f('SIGNED_OUT', null)); return { error: null }; },
           async signInWithPassword({ email }) {
+            await reseau('auth:signIn');
             const u = (D.__auth || []).find((x) => x.email === email);
             if (!u) return { data: {}, error: { message: 'Invalid login credentials' } };
             session = { user: u }; return { data: { session, user: u }, error: null };

@@ -24,6 +24,16 @@ npm test            # node --test "test/**/*.test.js"
   avec témoin positif.
 - `source.test.js` — gardes statiques : boutons morts, `getElementById`
   orphelins, `confirm/alert/prompt` natifs, dates UTC, CSS (commentaires fermés).
+- `echappement.test.js` — `esc`/`escJs`/`safeUrl`/`sanitizeNotesHtml` (v=2).
+- `dependances.test.js` — bibliothèques hébergées + SRI, références dans
+  `index.html` ET `app.js` (chargement à la demande), scripts `defer` dans
+  l'ordre, `?v=N` sur `app.js`/`styles.css` (v=3, v=5).
+- `demarrage.test.js` — v=5 : vagues de requêtes au démarrage (base « à
+  guichet »), écran d'attente (posé / retiré / échec), Chart.js à la demande
+  (`sansChart`), liens signés groupés, script de tête d'`index.html`.
+- `mobile.test.js` — v=5 : préconditions du rendu mobile (pas de style en ligne
+  sur les grands blocs, règles des media queries). Le rendu lui-même se prouve
+  au banc (`npm run banc` échoue sur débordement ; `npm run mesures`).
 
 Pièges (voir `CLAUDE.md §2`) : figer le temps ; les `let`/`const` d'`app.js` ne
 sont pas sur le contexte (passer par `lire`/`injecter`) ; un tableau du contexte

@@ -81,6 +81,68 @@ const S = {
 };
 
 // ════════════════════════════════════════════════════════════════════
+// v=5 — DÉMARRAGE RAPIDE : bibliothèques à la demande, liens groupés, écran d'attente
+// ════════════════════════════════════════════════════════════════════
+
+// Chart.js ne sert qu'au tableau de bord et à la section Macro : index.html ne le
+// charge plus (l'écran de connexion s'affiche sans lui). Il se télécharge à la
+// première utilisation, une seule fois, avec son empreinte SRI (vendor/empreintes.json).
+const BIBLIOS={
+  chart:{src:'vendor/chartjs-4.4.1/chart.umd.js',integrity:'sha384-dug+JxfBvklEQdJ4AYuBBAIScUz0bVN73xpy273gcAwHjb3qI0fXmuYNaNfdyYJG',pret:()=>typeof Chart!=='undefined'},
+};
+const _biblioEnCours={};
+function chargerBiblio(nom){
+  const b=BIBLIOS[nom];
+  if(!b)return Promise.reject(new Error('Bibliothèque inconnue : '+nom));
+  if(b.pret())return Promise.resolve();
+  if(!_biblioEnCours[nom])_biblioEnCours[nom]=new Promise((ok,ko)=>{
+    const s=document.createElement('script');
+    s.src=b.src;s.integrity=b.integrity;s.async=true; // fichier modifié = refusé
+    s.onload=()=>ok();
+    s.onerror=()=>{delete _biblioEnCours[nom];ko(new Error('Échec de chargement : '+b.src));};
+    document.head.appendChild(s);
+  });
+  return _biblioEnCours[nom];
+}
+// Un graphique attend Chart.js : s'il n'est pas encore là, on le charge puis on
+// relance le dessin (une seule fois par fonction, même si on l'a demandé
+// plusieurs fois entre-temps). Un échec se dit en phrase, pas en chemin de fichier.
+const _relancesGraphes=new Set();
+function grapheDisponible(relancer){
+  if(typeof Chart!=='undefined')return true;
+  const premier=!_relancesGraphes.size;
+  _relancesGraphes.add(relancer);
+  if(premier)chargerBiblio('chart').then(()=>{
+    const r=[..._relancesGraphes];_relancesGraphes.clear();r.forEach(f=>f());
+  },()=>{
+    _relancesGraphes.clear();
+    toast('Graphiques indisponibles — vérifie ta connexion puis recharge la page','err');
+  });
+  return false;
+}
+
+// Liens signés de plusieurs fichiers en UNE requête (avant : un aller-retour par
+// image). Rend { chemin: url } ; un chemin en échec est simplement absent.
+async function signerChemins(chemins,duree=3600){
+  const uniques=[...new Set((chemins||[]).filter(Boolean))];
+  if(!uniques.length)return {};
+  try{
+    const{data,error}=await sb.storage.from(BUCKET).createSignedUrls(uniques,duree);
+    if(error||!Array.isArray(data))return {};
+    const liens={};
+    data.forEach(d=>{if(d&&d.path&&d.signedUrl&&!d.error)liens[d.path]=d.signedUrl;});
+    return liens;
+  }catch(_){return {};}
+}
+
+// Écran « Chargement de ton espace… » affiché à la place du formulaire tant
+// qu'une session se charge : plus de formulaire de connexion qui clignote pour
+// quelqu'un de déjà connecté. index.html pose html.demarrage AVANT le premier
+// affichage si une session est mémorisée ; le démarrage le retire toujours
+// (app prête, pas de session, ou échec → retour au formulaire).
+function afficherChargement(oui){document.documentElement.classList.toggle('demarrage',!!oui);}
+
+// ════════════════════════════════════════════════════════════════════
 // AUTH MODULE
 // ════════════════════════════════════════════════════════════════════
 
@@ -145,8 +207,10 @@ async function doLogin(){
     const{data,error}=await sb.auth.signInWithPassword({email,password});
     if(error)throw error;
     showAuthMsg('login','success','Connexion réussie !');
+    afficherChargement(true);
     await postLogin();
   }catch(e){
+    afficherChargement(false);
     showAuthMsg('login','error',translateAuthError(e));
   }finally{
     btn.disabled=false;
@@ -168,6 +232,7 @@ async function doSignup(){
     if(error)throw error;
     if(data.user&&data.session){
       showAuthMsg('signup','success','Compte créé ! Bienvenue.');
+      afficherChargement(true);
       await postLogin();
     }else{
       // Some configs send a confirmation email, but our trigger auto-confirms
@@ -175,9 +240,11 @@ async function doSignup(){
       const{data:sd,error:se}=await sb.auth.signInWithPassword({email,password});
       if(se)throw se;
       showAuthMsg('signup','success','Compte créé ! Connexion…');
+      afficherChargement(true);
       await postLogin();
     }
   }catch(e){
+    afficherChargement(false);
     showAuthMsg('signup','error',translateAuthError(e));
   }finally{
     btn.disabled=false;
@@ -215,8 +282,10 @@ async function doRecovery(){
     const{error}=await sb.auth.updateUser({password});
     if(error)throw error;
     showAuthMsg('recovery','success','Mot de passe mis à jour ! Connexion…');
+    afficherChargement(true);
     await postLogin();
   }catch(e){
+    afficherChargement(false);
     showAuthMsg('recovery','error',translateAuthError(e));
   }finally{
     btn.disabled=false;
@@ -231,8 +300,11 @@ async function logout(){
 }
 
 async function postLogin() {
+  // v=5 : Chart.js (tableau de bord) se télécharge pendant que les données
+  // arrivent, sans rien bloquer ; les graphiques l'attendent s'il le faut.
+  chargerBiblio('chart').catch(() => {});
   const { data: { user } } = await sb.auth.getUser();
-  if (!user) return;
+  if (!user) { afficherChargement(false); return; }
   S.authUser = { id: user.id, email: user.email };
   S.isSuperAdmin = (user.app_metadata?.role === 'super_admin');
 
@@ -246,9 +318,17 @@ async function postLogin() {
   const um = document.getElementById('um-email');
   if (um) um.textContent = S.authUser.email;
 
-  // V9 : chargement du workspace courant (essentiel pour le filtrage RLS)
-  await loadCurrentWorkspace();
+  // v=5 — UNE vague au lieu de quatre allers-retours en file : workspace courant
+  // (essentiel pour le filtrage RLS), thème, migration V8 et, pour l'admin, la
+  // liste des workspaces. Aucune de ces lectures n'attend le résultat d'une autre.
+  await Promise.all([
+    loadCurrentWorkspace(),
+    applyUserTheme(),
+    migrateLocalStorageToSupabase(),
+    loadAvailableWorkspaces(),
+  ]);
   if (!S.workspaceId) {
+    afficherChargement(false);
     const reason = S.lastWorkspaceError
       ? ' (détail : ' + S.lastWorkspaceError + ')'
       : '';
@@ -256,9 +336,11 @@ async function postLogin() {
     await sb.auth.signOut();
     return;
   }
+  // Le workspace d'appartenance n'est connu qu'après la vague : le non-admin (ou
+  // l'admin dont la liste a échoué) y retrouve son seul workspace, comme avant.
+  if (!S.availableWorkspaces.length && S.workspace) S.availableWorkspaces = [S.workspace];
 
   // V9b : afficher le badge workspace dans le header
-  await loadAvailableWorkspaces();
   updateWorkspaceBadge();
   // Le clic sur le badge ramène au workspace d'appartenance (super-admin uniquement)
   const wsBadgeEl = document.getElementById('workspace-badge');
@@ -267,14 +349,10 @@ async function postLogin() {
     wsBadgeEl.addEventListener('click', onWorkspaceBadgeClick);
   }
 
-  // V8 : application du thème depuis Supabase user_preferences
-  await applyUserTheme();
-  // V8 : migration one-shot localStorage → Supabase
-  await migrateLocalStorageToSupabase();
-
-  // Bascule de l'écran auth vers l'app
+  // Bascule de l'écran auth vers l'app (thème V8 et migration déjà faits dans la vague)
   document.getElementById('auth-screen').classList.add('hidden');
   document.getElementById('app-wrap').classList.add('ready');
+  afficherChargement(false);
 
   await initApp();
 }
@@ -332,7 +410,13 @@ function detectRecoveryFlow(){
   // Check existing session
   const{data:{session}}=await sb.auth.getSession();
   if(session&&!window.location.hash.includes('type=recovery')){
-    await postLogin();
+    // v=5 : « Chargement de ton espace… » reste affiché pendant le chargement ;
+    // un échec ramène au formulaire (jamais d'écran d'attente figé).
+    try{await postLogin();}
+    catch(e){console.error('Démarrage interrompu :',e);}
+    finally{if(!document.getElementById('app-wrap').classList.contains('ready'))afficherChargement(false);}
+  }else{
+    afficherChargement(false);
   }
   // Listen for auth events
   sb.auth.onAuthStateChange((event,session)=>{
@@ -561,6 +645,8 @@ async function initApp() {
     tab.addEventListener('click', () => {
       document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
       tab.classList.add('active');
+      // v=5 : sur téléphone, la barre d'onglets défile ; l'onglet choisi reste visible
+      tab.scrollIntoView({ inline: 'nearest', block: 'nearest' });
       document.querySelectorAll('.sec').forEach(s => s.classList.remove('active'));
       document.getElementById('sec-' + tab.dataset.s).classList.add('active');
       if (tab.dataset.s === 'currency') loadCurrencyReport();
@@ -582,8 +668,8 @@ async function initApp() {
     }
   });
 
-  // Chargement des données (filtrage automatique via RLS workspace)
-  await Promise.all([loadUsers(), loadAccounts()]);
+  // v=5 — Le squelette (barres de mois, sélecteurs, séparateurs) se construit tout
+  // de suite : il ne dépend d'aucune donnée.
   buildRptMonthBar();
   buildDashYearPick();
   const now = new Date();
@@ -592,9 +678,12 @@ async function initApp() {
 
   // V9.7 — Init des splitters draggables du dashboard
   initDashSplitters();
+  initChartResize();
 
-  // Identification du profil interne (via auth_user_id)
-  const { data: pu } = await sb.from('users').select('*').eq('auth_user_id', S.authUser.id).maybeSingle();
+  // v=5 — UNE vague (filtrage automatique via RLS workspace) : traders, comptes,
+  // profil interne (via auth_user_id) et trades partent ensemble. Avant : trois
+  // vagues, les trades attendaient le profil, qui attendait traders et comptes.
+  const [, , pu] = await Promise.all([loadUsers(), loadAccounts(), lireProfil(), loadTrades()]);
   if (pu) {
     S.appUser = pu;
     const dot = document.getElementById('udot');
@@ -609,9 +698,6 @@ async function initApp() {
     const un = document.getElementById('uname');
     if (un) un.textContent = S.authUser.email.split('@')[0].toUpperCase();
   }
-
-  initChartResize();
-  await loadTrades();
 
   // Premier rendu : filtre par mois courant
   if (S_dashMonths.size > 0) {
@@ -668,6 +754,11 @@ async function loadTrades(){
   if (S.currentWorkspaceId) q = q.eq('workspace_id', S.currentWorkspaceId);
   if(S.accId!=='all')q=q.eq('account_id',S.accId);
   const{data}=await q;S.trades=data||[];S.filtered=[...S.trades];
+}
+// Profil interne de la personne connectée (public.users, via auth_user_id).
+async function lireProfil(){
+  const{data}=await sb.from('users').select('*').eq('auth_user_id',S.authUser.id).maybeSingle();
+  return data;
 }
 async function loadTradeImages(id){const{data}=await sb.from('trade_images').select('*').eq('trade_id',id);return data||[];}
 
@@ -1424,7 +1515,14 @@ function makeRRChart(keys){
   }});
 }
 
+// v=5 : redessine les deux graphiques du tableau de bord selon le filtre COURANT
+// (relance unique quand Chart.js arrive, même si le filtre a changé entre-temps).
+function redessinerGraphiques(){
+  if(S_dashMonths.size>0)renderChartsByMonths([...S_dashMonths]);else renderCharts();
+}
+
 async function renderCharts(){
+  if(!grapheDisponible(redessinerGraphiques))return;
   // Vue ALL TIME (aucun mois sélectionné)
   const trades=S.trades.filter(t=>t.status!=='cancelled');
   const{labels,data}=buildCumRRData(trades);
@@ -1545,11 +1643,9 @@ async function showTradeDetailById(tradeId){
       container.innerHTML='<div style="font-family:Arial,monospace;font-size:8px;color:var(--amber);letter-spacing:.14em;margin-bottom:6px">▪ CAPTURES</div><div style="color:var(--text3);font-size:10px;text-align:center;padding:8px">Aucune capture</div>';
       return;
     }
-    const results=await Promise.all(images.map(async img=>{
-      const{data}=await sb.storage.from(BUCKET).createSignedUrl(img.storage_path,3600);
-      return data?{url:data.signedUrl,type:img.image_type,name:img.filename}:null;
-    }));
-    const validImgs=results.filter(Boolean);
+    const liens=await signerChemins(images.map(img=>img.storage_path));
+    const validImgs=images.filter(img=>liens[img.storage_path])
+      .map(img=>({url:liens[img.storage_path],type:img.image_type,name:img.filename}));
     if(!validImgs.length){container.innerHTML='';return;}
     // Regroupement par type (entry / close / file)
     const groups={};
@@ -1700,6 +1796,7 @@ function renderStatsByMonths(keys) {
 }
 
 async function renderChartsByMonths(keys){
+  if(!grapheDisponible(redessinerGraphiques))return;
   if(S.chartRR)S.chartRR.destroy();
   // Courbe PnL avec uniquement les trades des mois sélectionnés
   const trades=getTradesForMonths(keys);
@@ -1803,19 +1900,28 @@ function toggleTJ(id){
 
 async function loadImagesInView(tradeId){
   const images=await loadTradeImages(tradeId);
-  for(const type of['entry','close','file']){
-    const el=document.getElementById(`ig-${type}-${tradeId}`);if(!el)continue;
-    const imgs=images.filter(i=>i.image_type===type&&(i.mime_type?.startsWith('image/')||type!=='file'));
-    if(!imgs.length){el.innerHTML='';continue;}await fillImgGrid(el,imgs);
-  }
+  const grilles=['entry','close','file'].map(type=>({
+    el:document.getElementById(`ig-${type}-${tradeId}`),
+    imgs:images.filter(i=>i.image_type===type&&(i.mime_type?.startsWith('image/')||type!=='file')),
+  })).filter(g=>g.el);
+  grilles.forEach(g=>{g.el.innerHTML=g.imgs.length?'<div class="spin"></div>':'';});
+  // v=5 : toutes les vignettes du trade signées en UNE requête (avant : une par image)
+  const liens=await signerChemins(grilles.flatMap(g=>g.imgs.map(i=>i.storage_path)));
+  grilles.forEach(g=>{if(g.imgs.length)fillImgGrid(g.el,g.imgs,liens);});
   const fl=document.getElementById(`fl-${tradeId}`);
   if(fl){const nI=images.filter(i=>i.image_type==='file'&&!i.mime_type?.startsWith('image/'));if(nI.length)fl.innerHTML=nI.map(f=>`<div style="padding:2px 0;font-size:10px;color:var(--text2);font-family:Arial,monospace">📄 ${esc(f.filename)}</div>`).join('');}
 }
 
-async function fillImgGrid(container,imgs){
-  container.innerHTML='<div class="spin"></div>';
-  const results=await Promise.all(imgs.map(async img=>{const{data}=await sb.storage.from(BUCKET).createSignedUrl(img.storage_path,3600);return data?{url:data.signedUrl,name:img.filename}:null;}));
-  container.innerHTML=results.filter(Boolean).map(r=>`<img src="${r.url}" class="img-thumb" onclick="bigImg('${r.url}')">`).join('');
+// liens : { chemin: url } déjà signés (signerChemins) ; sinon signés ici en une requête.
+async function fillImgGrid(container,imgs,liens){
+  if(!liens){
+    container.innerHTML='<div class="spin"></div>';
+    liens=await signerChemins(imgs.map(img=>img.storage_path));
+  }
+  container.innerHTML=imgs.filter(img=>liens[img.storage_path]).map(img=>{
+    const url=liens[img.storage_path];
+    return `<img src="${url}" class="img-thumb" onclick="bigImg('${url}')">`;
+  }).join('');
 }
 
 function filterJournal(){
@@ -1877,11 +1983,16 @@ function fillModal(t){
 }
 
 async function renderExistingImgs(){
+  // v=5 : les captures des trois onglets signées en UNE requête (avant : une par image)
+  const images=S.existingImgs.filter(i=>i.mime_type?.startsWith('image/'));
+  const liens=await signerChemins(images.map(i=>i.storage_path));
   for(const type of['entry','close','file']){
-    const imgs=S.existingImgs.filter(i=>i.image_type===type&&i.mime_type?.startsWith('image/'));
+    const imgs=images.filter(i=>i.image_type===type);
     const c=document.getElementById('prev-'+type);if(!c||!imgs.length)continue;
-    const results=await Promise.all(imgs.map(async i=>{const{data}=await sb.storage.from(BUCKET).createSignedUrl(i.storage_path,3600);return data?`<img src="${data.signedUrl}" class="img-thumb" onclick="bigImg('${data.signedUrl}')">`:'';}));
-    c.innerHTML=results.join('');
+    c.innerHTML=imgs.map(i=>{
+      const url=liens[i.storage_path];
+      return url?`<img src="${url}" class="img-thumb" onclick="bigImg('${url}')">`:'';
+    }).join('');
   }
 }
 
@@ -2151,6 +2262,7 @@ async function loadCurrencyReport(){
   // V9.4 : map entry_id → currency pour les updates realtime
   S._entryIdToCurrency={};
   if(data){
+    const aSigner=[]; // v=5 : [zone, devise, chemin] signés ensuite en UNE requête
     for(const entry of(data.currency_report_entries||[])){
       window._curBiasCache[entry.currency]=entry.bias||'';
       window._curNotesCache[entry.currency]=entry.notes||'';
@@ -2166,19 +2278,18 @@ async function loadCurrencyReport(){
             byZone[zone]=img;
           }
         }
-        for(const zone in byZone){
-          const img=byZone[zone];
-          const{data:u}=await sb.storage.from(BUCKET).createSignedUrl(img.storage_path,3600);
-          if(u){window._curImgCache[zone+'-'+entry.currency]={url:u.signedUrl,isRemote:true,path:img.storage_path};}
-        }
+        for(const zone in byZone)aSigner.push([zone,entry.currency,byZone[zone].storage_path]);
       }
+    }
+    const liens=await signerChemins(aSigner.map(a=>a[2]));
+    for(const[zone,code,chemin]of aSigner){
+      if(liens[chemin])window._curImgCache[zone+'-'+code]={url:liens[chemin],isRemote:true,path:chemin};
     }
   }
   renderCurrencyView();refreshCurrencyBtnColors();
   // V9.4 : (re)connecter le canal realtime pour cette semaine
   subscribeRealtimeForCurrentReport();
 }
-async function loadCurrencyReportSilent(){await loadCurrencyReport();}
 
 function flushCurrentViewToCache(){
   if(!window._curBiasCache)window._curBiasCache={};
@@ -3126,6 +3237,7 @@ function fmtYmLabel(ym){
 }
 
 function renderMacroChart(force){
+  if(!grapheDisponible(()=>renderMacroChart(force)))return;
   const sub=getMacroSubConfig();if(!sub)return;
   const tab=MACRO_TABS.find(t=>t.key===S_macroTab);
   const titleEl=document.getElementById('macro-indic-title');
@@ -3292,7 +3404,8 @@ function buildRptMonthBar(){
   if(pick)pick.value=S_rptMonth;
   buildWeeksForMonth(S_rptMonth);
   buildRptCurrencyBar();
-  loadCurrencyReportSilent();
+  // v=5 : le rapport de la semaine (et ses captures) ne se charge plus au
+  // démarrage mais à l'ouverture de l'onglet Rapports (clic de navigation).
 }
 
 function getMondaysInMonth(year,monthIdx){

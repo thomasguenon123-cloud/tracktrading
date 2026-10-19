@@ -4,7 +4,8 @@
   "description": "Journal de trading : front statique (GitHub Pages) + Supabase",
   "scripts": {
     "test": "node --test \"test/**/*.test.js\"",
-    "banc": "node scripts/banc/banc.js"
+    "banc": "node scripts/banc/banc.js",
+    "mesures": "node scripts/banc/mesures.js"
   },
   "engines": {
     "node": ">=22"

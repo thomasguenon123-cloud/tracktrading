@@ -4,13 +4,20 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>TrackTrading</title>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=Arial:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+<!-- v=5 : session mémorisée (ou retour de lien de connexion) → écran « Chargement
+     de ton espace… » dès le premier affichage, au lieu du formulaire qui clignote.
+     Lecture seule ; app.js retire toujours la classe (app prête, pas de session, échec). -->
+<script>try{if((localStorage.getItem('sb-luduuungdwybkntsnafw-auth-token')||/access_token=/.test(location.hash))&&!/type=recovery/.test(location.hash))document.documentElement.classList.add('demarrage');}catch(e){}</script>
 <!-- FND-04 : bibliotheques hebergees (vendor/), versions exactes + empreinte SRI.
      Fini le CDN en version flottante (@2) : une publication cassee cote CDN ne
-     peut plus passer en prod sans test, et un fichier altere est refuse. -->
-<script src="vendor/supabase-js-2.118.0/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK"></script>
-<script src="vendor/chartjs-4.4.1/chart.umd.js" integrity="sha384-dug+JxfBvklEQdJ4AYuBBAIScUz0bVN73xpy273gcAwHjb3qI0fXmuYNaNfdyYJG"></script>
-<link rel="stylesheet" href="styles.css">
+     peut plus passer en prod sans test, et un fichier altere est refuse.
+     v=5 : scripts en defer (l'ecran s'affiche sans les attendre, ordre conserve) ;
+     Chart.js n'est plus charge ici mais a la demande par app.js (BIBLIOS, meme
+     empreinte) ; la police Google inutilisee (IBM Plex Mono) est retiree.
+     ?v=N sur styles.css et app.js : a INCREMENTER a chaque version qui les change
+     (sinon un navigateur peut garder l'ancien fichier en cache avec ce fichier-ci). -->
+<script src="vendor/supabase-js-2.118.0/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" defer></script>
+<link rel="stylesheet" href="styles.css?v=5">
 </head>
 <body>
 
@@ -19,6 +26,7 @@
   <div class="auth-card">
     <div class="auth-logo">Track<em>Trading</em></div>
     <div class="auth-tagline">Terminal Pro · Accès sécurisé</div>
+    <noscript><div class="auth-msg visible error">TrackTrading a besoin de JavaScript : active-le dans ton navigateur puis recharge la page.</div></noscript>
 
     <div class="auth-tabs">
       <button class="auth-tab active" data-tab="login" type="button">Se connecter</button>
@@ -98,6 +106,14 @@
       </button>
       <div class="auth-msg" id="recovery-msg"></div>
     </div>
+  </div>
+  <!-- v=5 — Écran d'attente (html.demarrage) : remplace le formulaire pendant le
+       chargement d'une session existante. L'aide n'apparaît qu'après 8 s. -->
+  <div id="ecran-chargement" role="status" aria-live="polite">
+    <div class="auth-logo">Track<em>Trading</em></div>
+    <div class="ec-spin"></div>
+    <div class="ec-texte">Chargement de ton espace…</div>
+    <div class="ec-aide">Si rien ne s'affiche, vérifie ta connexion puis recharge la page.</div>
   </div>
 </div>
 
@@ -263,10 +279,10 @@
   </div>
 
   <!-- Panel détail trade slide-in depuis la droite (clic sur barre mensuelle) -->
-  <div id="trade-journal-panel" style="position:fixed;top:0;right:-520px;width:500px;height:100vh;z-index:800;background:var(--bg2);border-left:1px solid var(--border);overflow-y:auto;transition:right .3s cubic-bezier(.4,0,.2,1);box-shadow:var(--shadow2);">
+  <div id="trade-journal-panel" style="position:fixed;top:0;right:-520px;width:500px;max-width:100%;height:100vh;height:100dvh;z-index:800;background:var(--bg2);border-left:1px solid var(--border);overflow-y:auto;transition:right .3s cubic-bezier(.4,0,.2,1);box-shadow:var(--shadow2);">
     <div style="position:sticky;top:0;z-index:1;background:var(--bg2);border-bottom:1px solid var(--border);padding:12px 14px;display:flex;align-items:center;justify-content:space-between;">
       <span id="tjp-title" style="font-family:Arial,monospace;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--amber)">Détail du trade</span>
-      <button onclick="closeTradeJournalPanel()" style="background:var(--bg3);border:1px solid var(--border2);color:var(--text2);width:22px;height:22px;border-radius:3px;cursor:pointer;font-size:12px;display:flex;align-items:center;justify-content:center;line-height:1">✕</button>
+      <button class="tjp-fermer" type="button" aria-label="Fermer le détail" onclick="closeTradeJournalPanel()" style="background:var(--bg3);border:1px solid var(--border2);color:var(--text2);width:22px;height:22px;border-radius:3px;cursor:pointer;font-size:12px;display:flex;align-items:center;justify-content:center;line-height:1">✕</button>
     </div>
     <div id="tjp-content" style="padding:14px;"></div>
   </div>
@@ -279,11 +295,12 @@
        │  Account Balance (pleine)     │  ← bas, pleine largeur
        └────────────────────────────────┘
        Position de chaque splitter persistée en localStorage.
+       v=5 : la grille est décrite dans styles.css (empilée sur téléphone).
   -->
-  <div id="dash-main" style="display:grid;grid-template-columns:1fr;grid-template-rows:var(--dash-top-h,45%) 5px 1fr;height:calc(100vh - 115px);background:var(--border);overflow:hidden;">
+  <div id="dash-main">
 
     <!-- RANGÉE HAUT : Stats + Splitter vertical + R:R par trade -->
-    <div id="dash-top-row" style="grid-row:1/2;display:grid;grid-template-columns:var(--dash-left-w,38%) 5px 1fr;min-height:0;background:var(--border);">
+    <div id="dash-top-row">
       <!-- HAUT-GAUCHE : Stats (DATAS) -->
       <div id="stats-panel" style="grid-column:1/2;background:var(--bg2);overflow-y:auto;padding:14px 12px;min-width:0;">
         <div id="stats-row">
@@ -340,7 +357,7 @@
     <span style="font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--text3);margin-right:4px;flex-shrink:0;">Devise</span>
     <div id="rpt-cur-btns" style="display:flex;gap:4px;flex-wrap:wrap;"></div>
   </div>
-  <div id="cur-single-view" style="height:calc(100vh - 150px);min-height:400px;display:flex;flex-direction:column;"></div>
+  <div id="cur-single-view"><div class="loading"><div class="spin"></div><br><br>Chargement…</div></div>
 </div>
 
 <!-- ════ JOURNAL ════ -->
@@ -374,7 +391,7 @@
     <!-- V9.8 — Approche pragmatique : on ne peut pas forcer le fuseau d'Investing.com
                  de manière fiable. À la place, on affiche en gros notre heure locale
                  et un guide de conversion clair. -->
-    <div style="margin-left:auto;display:flex;align-items:center;gap:10px;">
+    <div class="barre-outils-droite">
       <div style="display:flex;align-items:center;gap:6px;background:var(--bg3);border:1px solid var(--amber3);border-radius:3px;padding:4px 10px;">
         <span style="font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--text3)">Mon heure</span>
         <span id="cal-myclock" style="font-family:Arial,monospace;font-size:13px;font-weight:700;color:var(--amber);min-width:46px;text-align:center">--:--</span>
@@ -408,7 +425,7 @@
   </div>
 
   <!-- Iframe Investing.com -->
-  <div id="cal-content" style="width:100%;height:calc(100vh - 158px);position:relative;">
+  <div id="cal-content">
     <iframe id="cal-iframe"
       src=""
       width="100%" height="100%"
@@ -455,7 +472,7 @@
   <!-- Sous-indicateurs -->
   <div id="macro-sub-bar" style="display:flex;align-items:center;gap:4px;padding:7px 14px;background:var(--bg2);border-bottom:1px solid var(--border);flex-wrap:wrap;">
     <div id="macro-sub-btns" style="display:flex;gap:4px;flex-wrap:wrap;"></div>
-    <div style="margin-left:auto;display:flex;align-items:center;gap:10px;">
+    <div class="barre-outils-droite">
       <!-- V9.11 — Sélecteur de période -->
       <div style="display:flex;align-items:center;gap:6px;">
         <span style="font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--text3);">Période</span>
@@ -472,7 +489,7 @@
   </div>
 
   <!-- Zone de contenu : titre + graphique + dernière valeur -->
-  <div id="macro-content" style="padding:18px 20px;overflow-y:auto;height:calc(100vh - 210px);">
+  <div id="macro-content">
     <div id="macro-headline" style="display:flex;align-items:baseline;gap:14px;margin-bottom:6px;flex-wrap:wrap;">
       <span id="macro-indic-title" style="font-family:Arial,sans-serif;font-size:15px;font-weight:700;color:var(--text);">—</span>
       <span id="macro-indic-latest" style="font-family:Arial,monospace;font-size:13px;color:var(--amber);"></span>
@@ -541,6 +558,7 @@
     </div>
   </div>
 
+  <div class="admin-table-wrap">
   <table class="admin-table" id="admin-users-table">
     <thead>
       <tr>
@@ -556,10 +574,11 @@
       <tr><td colspan="6" style="text-align:center;color:var(--text3);padding:16px;font-family:Arial,monospace;font-size:9px">Chargement…</td></tr>
     </tbody>
   </table>
+  </div>
 </div>
 
 </div><!-- /app-wrap -->
 
-<script src="app.js"></script>
+<script src="app.js?v=5" defer></script>
 </body>
 </html>
