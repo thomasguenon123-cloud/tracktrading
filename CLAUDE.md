@@ -229,7 +229,7 @@ Rapport complet et priorisé : **remis à Thomas hors dépôt** (il décrit des
 défauts non corrigés ; le dépôt étant public, il n'y est pas versionné). Les
 constats y sont numérotés FND-01…
 
-**v=2 (en cours)** — correctifs de sécurité P0, sur accord de Thomas :
+**v=2 (publiée le 11/11/2026)** — correctifs de sécurité P0, sur accord de Thomas :
 - **FND-02 + FND-11** (code, fait) : `sanitizeNotesHtml` pour la note d'analyse
   (panneau de détail + journal) ; `esc()` échappe aussi `" '` ; ajout de
   `escJs`/`safeUrl` ; e-mail d'`adminRemove` passé par `escJs`. Banc : 0 fuite XSS.
@@ -243,7 +243,7 @@ constats y sont numérotés FND-01…
   ⚠️ Un déclencheur sur `public.users` en **SECURITY DEFINER** ne marcherait pas
   (`current_user` = propriétaire → garde jamais active) : rester en INVOKER.
 
-**v=3 (en cours)** — secrets & dépendances :
+**v=3 (publiée le 11/11/2026)** — secrets & dépendances :
 - **FND-04** (code, fait) : supabase-js (2.118.0) et Chart.js (4.4.1) **hébergés
   dans `vendor/`** avec empreinte **SRI**, fin du CDN flottant. `vendor/empreintes.json`
   + garde `test/dependances.test.js` (refuse tout CDN / version flottante, vérifie
@@ -253,7 +253,7 @@ constats y sont numérotés FND-01…
   fournisseur** par Thomas (action hors dépôt). La clé n'est plus utilisée par le
   code (section Macro en données figées), mais peut rester valide chez le fournisseur.
 
-**v=5 (19/10/2026, en attente de publication)** — mobile + démarrage, sur accord
+**v=5 (19/10/2026, publiée le 11/11/2026)** — mobile + démarrage, sur accord
 de Thomas (plan du rapport UX v1, remis hors dépôt comme le v2) :
 - **Démarrage** : requêtes en vagues parallèles (`postLogin` : whitelist + thème +
   migration ensemble ; `initApp` : traders + comptes + profil + trades ensemble),
@@ -275,7 +275,7 @@ de Thomas (plan du rapport UX v1, remis hors dépôt comme le v2) :
 (garde dans `test/dependances.test.js`) : **incrémenter N** à la prochaine version
 qui modifie `app.js` ou `styles.css`.
 
-**v=6 « données honnêtes » (11/11/2026, en attente de publication)** — sur accord
+**v=6 « données honnêtes » (publiée le 11/11/2026)** — sur accord
 de Thomas (arbitrages du 20/10/2026 : clos sans R mis à part ; % du P&L sur la
 somme des soldes de même devise ; trades de test hors stats ; affichage + faux
 succès, synchro en direct et présence reportées). Balayage de 75 constats + 8
@@ -305,3 +305,8 @@ relecteurs, 16 constats prouvés par un test, tous corrigés et gardés).
 
 ⚠️ **Déploiement** : rien côté Supabase pour la v=6. Assets en `?v=6` (garde
 dans `test/dependances.test.js`).
+
+**Publication du 11/11/2026** : v=2, v=3, v=5 et v=6 fusionnées ensemble dans
+`main` (avance rapide `395321c → fc513ac`, sur feu vert de Thomas) ; déploiement
+GitHub Pages réussi sur `fc513ac`. Prochaine version qui touche `app.js` ou
+`styles.css` : passer à `?v=7`.
