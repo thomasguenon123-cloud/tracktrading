@@ -90,16 +90,46 @@ test('sans session : le formulaire reprend la place de l écran d attente', asyn
   assert.ok(!classes(ctx).contains('demarrage'));
 });
 
-test('échec au démarrage : retour au formulaire, jamais d écran figé', async () => {
-  const db = faireDb();
-  db.auth.getSession = async () => ({ data: { session: { user: MEMBRE } }, error: null });
-  db.auth.getUser = async () => { throw new Error('réseau coupé'); };
-  const ctx = charger({ db, muet: true });
-  classes(ctx).add('demarrage');
+// v=6 : une session mémorisée qu'on ne peut pas vérifier (réseau, serveur) n'est pas
+// une déconnexion muette ; une exception de getSession ne fige pas l'écran d'attente.
+test('session illisible au démarrage : formulaire AVEC le motif, jamais un retour muet ni un écran figé', async () => {
+  const cas = [
+    [async () => ({ data: { session: null }, error: { message: 'Failed to fetch', status: 0 } }), /Connexion au serveur impossible/],
+    [async () => { throw new Error('stockage illisible'); }, /Connexion au serveur impossible/],
+    [async () => ({ data: { session: null }, error: { message: 'Invalid Refresh Token', status: 400 } }), /plus valide/],
+  ];
+  for (const [getSession, motif] of cas) {
+    const db = faireDb();
+    db.auth.getSession = getSession;
+    const ctx = charger({ db, muet: true });
+    classes(ctx).add('demarrage');
+    await laisserFiler();
+    assert.ok(!classes(ctx).contains('demarrage'), 'le formulaire est rendu');
+    assert.match(ctx.__el('login-msg').textContent, motif);
+  }
+  // Témoin : sans session ni erreur (déconnecté), aucun message d'erreur
+  const ctx = charger({ muet: true });
   await laisserFiler();
-  assert.ok(!ctx.__el('app-wrap').classList.contains('ready'), 'témoin : l app n a pas démarré');
-  assert.ok(!classes(ctx).contains('demarrage'), 'le formulaire est rendu');
-  assert.ok(ctx.__console.some((l) => l[0] === 'error'), 'l échec est journalisé');
+  assert.doesNotMatch(ctx.__el('login-msg').textContent || '', /impossible|plus valide/);
+});
+
+test('échec au démarrage : retour au formulaire, jamais d écran figé', async () => {
+  // v=6 (constat 66) : postLogin traite lui-même un getUser qui lève (message) ; une
+  // exception imprévue plus loin passe encore par le filet de bootAuth (finally).
+  for (const getUser of [
+    async () => { throw new Error('réseau coupé'); },
+    async () => ({ data: { user: { get id() { throw new Error('profil illisible'); }, email: 'trader@exemple.fr' } }, error: null }),
+  ]) {
+    const db = faireDb();
+    db.auth.getSession = async () => ({ data: { session: { user: MEMBRE } }, error: null });
+    db.auth.getUser = getUser;
+    const ctx = charger({ db, muet: true });
+    classes(ctx).add('demarrage');
+    await laisserFiler();
+    assert.ok(!ctx.__el('app-wrap').classList.contains('ready'), 'témoin : l app n a pas démarré');
+    assert.ok(!classes(ctx).contains('demarrage'), 'le formulaire est rendu');
+    assert.ok(ctx.__console.some((l) => l[0] === 'error'), 'l échec est journalisé');
+  }
 });
 
 test('aucun espace attribué : l écran d attente laisse place au message', async () => {
@@ -109,7 +139,7 @@ test('aucun espace attribué : l écran d attente laisse place au message', asyn
   await laisserFiler();
   classes(ctx).add('demarrage');
   await ctx.postLogin();
-  assert.match(ctx.__el('login-msg').textContent, /Aucun workspace assigné/, 'témoin : le message est écrit');
+  assert.match(ctx.__el('login-msg').textContent, /Aucun espace n'est attribué/, 'témoin : le message est écrit');
   assert.ok(!classes(ctx).contains('demarrage'), 'et visible (formulaire rendu)');
 });
 
@@ -181,7 +211,8 @@ test('fiche trade : toutes les captures signées en UNE requête (avant : une pa
   assert.equal(db.signatures[0].length, 4);
   assert.equal(db.unitaires.length, 0);
   assert.match(ctx.__el('prev-entry').innerHTML, /signe\/trades\/t1\/entry\/a\.png/, 'témoin : la vignette est rendue');
-  assert.doesNotMatch(ctx.__el('prev-entry').innerHTML, /refuse/, 'un fichier sans droit est simplement absent');
+  assert.doesNotMatch(ctx.__el('prev-entry').innerHTML, /refuse/, 'un fichier sans droit n est pas affiché');
+  assert.match(ctx.__el('prev-entry').innerHTML, /1 capture déjà enregistrée indisponible/, 'v=6 (constat 29) : mais il est compté et dit');
   assert.match(ctx.__el('prev-close').innerHTML, /b\.png/);
   assert.match(ctx.__el('prev-file').innerHTML, /c\.png/);
 });
@@ -196,10 +227,11 @@ test('journal : les vignettes d un trade signées en UNE requête', async () => 
   ['ig-entry-t1', 'ig-close-t1', 'ig-file-t1', 'fl-t1'].forEach((id) => ctx.__creer(id));
   await ctx.loadImagesInView('t1');
   assert.equal(db.signatures.length, 1);
-  assert.deepEqual(horsContexte(db.signatures[0]), ['trades/t1/entry/a.png', 'trades/t1/close/b.png']);
+  // v=6 (constat 31) : le PDF est signé dans la MÊME requête, pour un lien ouvrable.
+  assert.deepEqual(horsContexte(db.signatures[0]), ['trades/t1/entry/a.png', 'trades/t1/close/b.png', 'trades/t1/file/releve.pdf']);
   assert.match(ctx.__el('ig-entry-t1').innerHTML, /a\.png/, 'témoin : vignette rendue');
   assert.match(ctx.__el('ig-close-t1').innerHTML, /b\.png/);
-  assert.match(ctx.__el('fl-t1').innerHTML, /releve\.pdf/, 'le PDF reste listé (non signé)');
+  assert.match(ctx.__el('fl-t1').innerHTML, /href="https:\/\/exemple\.invalid\/signe\/trades\/t1\/file\/releve\.pdf"[^>]*>releve\.pdf</, 'le PDF est listé par son nom, avec son lien');
 });
 
 test('panneau de détail : captures signées en UNE requête', async () => {

@@ -71,3 +71,41 @@ test('panneau detail : la note d analyse riche est nettoyee', async () => {
   assert.match(html, /<i>contexte<\/i>/, 'temoin positif : mise en forme conservee');
   assert.ok(!html.includes('<tt-xss'), 'aucune balise injectee');
 });
+
+// v=6 (FND-02 complété) : une balise interdite IMBRIQUÉE dans une balise retirée (a,
+// span sans couleur, table…) doit être retirée aussi. Marqueur inerte, aucun script.
+test('sanitizeNotesHtml : balise interdite imbriquée dans une balise retirée, retirée aussi', () => {
+  const { sanitizeNotesHtml } = charger();
+  for (const h of ['<a href="#"><tt-xss>x</tt-xss></a>', '<span><tt-xss>x</tt-xss></span>',
+    '<b><span><tt-xss>y</tt-xss></span></b>', '<h2><tt-xss>w</tt-xss></h2>', '<div><a><tt-xss>v</tt-xss></a></div>']) {
+    const out = sanitizeNotesHtml(h);
+    assert.doesNotMatch(out, /tt-xss/i, h + ' → ' + out);
+  }
+  // témoin positif : texte et mise en forme autorisée survivent au déballage
+  assert.equal(sanitizeNotesHtml('<a><b>ok</b></a>'), '<b>ok</b>');
+  assert.equal(sanitizeNotesHtml('<span><i>it</i></span>'), '<i>it</i>');
+});
+
+// v=6 (revue) : la couleur d'un trader (public.users.color, modifiable par son
+// propriétaire) et celle d'un pair en présence (envoyée par son navigateur) sont des
+// champs libres rendus dans un attribut style : seule une couleur hexadécimale passe.
+test('couleur du trader (journal) et du pair (présence) : seule une couleur hexadécimale est rendue', () => {
+  const PIEGE = 'red"><tt-xss data-champ="couleur"></tt-xss><span style="x';
+  const ctx = charger();
+  const trade = (color) => ({ id: 't1', status: 'closed', direction: 'LONG', instrument: 'EURUSD', trade_date: '2026-10-20',
+    created_at: '2026-10-20T08:00:00Z', actual_rr: 1, users: { name: 'Trader Fictif', color } });
+  for (const p of [PIEGE, '#fff' + PIEGE]) { // le 2e commence par une vraie couleur
+    const piege = ctx.tradeHTML(trade(p));
+    assert.match(piege, /Trader Fictif/, 'témoin : le badge du trader est rendu');
+    assert.ok(!piege.includes('<tt-xss'), 'aucune balise injectée (journal) : ' + p);
+  }
+  assert.match(ctx.tradeHTML(trade('#4da6ff')), /color:#4da6ff/, 'témoin : une vraie couleur est gardée');
+  // Présence (Rapports) : la couleur vient du message de présence d'un autre navigateur
+  lire(ctx, `_peers['c1']={user:'Trader Fictif',color:${JSON.stringify(PIEGE)},currency:S_curCode,lastSeen:Date.now()}`);
+  lire(ctx, `_peers['c2']={user:'Autre Fictif',color:'#f0c040',currency:S_curCode,lastSeen:Date.now()}`);
+  ctx.refreshPeersBadge();
+  const pres = ctx.__el('presence-text').innerHTML;
+  assert.match(pres, /Trader Fictif/, 'témoin : la présence est rendue');
+  assert.match(pres, /background:#f0c040/, 'témoin : une vraie couleur est gardée');
+  assert.ok(!pres.includes('<tt-xss'), 'aucune balise injectée (présence)');
+});

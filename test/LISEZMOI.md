@@ -13,7 +13,8 @@ npm test            # node --test "test/**/*.test.js"
 
 - `charger-app.js` — charge `app.js` dans un contexte `node:vm` avec des
   doublures minimales (document inerte, faux client Supabase, `localStorage`,
-  Chart.js factice). Expose : `charger({maintenant, db, source})`,
+  Chart.js factice). `faireDb` note chaque écriture dans `db.appels` (avec ses
+  `options`, ex. `{count:'exact'}`). Expose : `charger({maintenant, db, source})`,
   `injecter(ctx, {…})`, `lire(ctx, 'expr')`, `horsContexte(x)`, `faireDb(…)`,
   `sansCommentaires(src)`.
 - `charger.test.js` — l'app se charge ; **canari** du masquage de commentaires.
@@ -34,6 +35,23 @@ npm test            # node --test "test/**/*.test.js"
 - `mobile.test.js` — v=5 : préconditions du rendu mobile (pas de style en ligne
   sur les grands blocs, règles des media queries). Le rendu lui-même se prouve
   au banc (`npm run banc` échoue sur débordement ; `npm run mesures`).
+- `honnete-*.test.js` — v=6 « données honnêtes » : un échec ne s'affiche jamais
+  comme un vide, un 0 ou un succès ; chaque garde **appelle** le code, avec témoin.
+  - `honnete-socle.test.js` : dates du trade, trades comptés, nombres saisis,
+    retouches d'intégration ; `honnete-fuseau.test.js` : même règle à New York.
+  - `honnete-tableau-de-bord.test.js`, `honnete-graphiques.test.js` : stats,
+    P&L par devise, mentions, courbe et barres.
+  - `honnete-saisie-trade.test.js` : fiche trade, clôture rapide, captures.
+  - `honnete-journal-detail.test.js` : journal, panneau de détail, pièces jointes.
+  - `honnete-connexion-admin.test.js` : connexion, lectures en échec, toasts
+    protégés (`ctx.actionUtilisateur()`), espaces, admin.
+  - `honnete-rapports-sauvegarde.test.js` : auto-save, semaines, captures des
+    Rapports (doublure `baseRapports`, base à guichet avec pannes).
+  - `honnete-macro-calendrier.test.js` : relevé macro daté, unités, fuseaux.
+  - `honnete-rapports-revue.test.js` (+ `aides-rapports.js`) et
+    `honnete-connexion-revue.test.js` : constats de la revue adverse v=6
+    (indicateur d'auto-save, barre des mois, captures sans lien ; changement
+    d'espace en échec, un seul à la fois).
 
 Pièges (voir `CLAUDE.md §2`) : figer le temps ; les `let`/`const` d'`app.js` ne
 sont pas sur le contexte (passer par `lire`/`injecter`) ; un tableau du contexte

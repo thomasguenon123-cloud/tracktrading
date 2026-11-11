@@ -34,17 +34,21 @@ const BIAS_CFG={
 };
 
 // ─── Calendrier économique V8 : zones et périodes (depuis V7) ───
+// inv = codes pays Investing.com demandés au widget (paramètre countries).
+// v=6 (#37) : EUR ne reprend plus 5, 4, 12 et 43, que cette même table attribue à USD, GBP,
+// CHF et NZD. Le reste de la liste EUR n'est pas vérifié : `note` le dit à l'écran.
+// v=6 (#38) : plus de bouton XAU : sans liste de pays, il montrait exactement « All ».
 const CAL_ZONES = [
   {code:'ALL',  label:'All',  inv:''},
   {code:'USD',  label:'USD',  cc:'us', inv:'5'},
-  {code:'EUR',  label:'EUR',  cc:'eu', inv:'72,17,10,4,55,8,11,42,71,32,12,22,9,89,49,7,53,5,43,38'},
+  {code:'EUR',  label:'EUR',  cc:'eu', inv:'72,17,10,55,8,11,42,71,32,22,9,89,49,7,53,38',
+   note:'liste non vérifiée, elle peut inclure des pays hors zone euro'},
   {code:'GBP',  label:'GBP',  cc:'gb', inv:'4'},
   {code:'JPY',  label:'JPY',  cc:'jp', inv:'35'},
   {code:'CAD',  label:'CAD',  cc:'ca', inv:'6'},
   {code:'CHF',  label:'CHF',  cc:'ch', inv:'12'},
   {code:'AUD',  label:'AUD',  cc:'au', inv:'25'},
   {code:'NZD',  label:'NZD',  cc:'nz', inv:'43'},
-  {code:'XAU',  label:'XAU',  inv:''},
 ];
 const CAL_PERIODS = [
   // V9.5 — descripteur exploité par buildCalIframeSrc :
@@ -55,6 +59,14 @@ const CAL_PERIODS = [
   {key:'week',     label:'Cette semaine',      kind:'thisWeek'},
   {key:'nextWeek', label:'Semaine prochaine',  kind:'nextWeek'},
 ];
+// v=6 (#46) : filtre d'importance fixe, demandé au widget ET dit à l'écran (« All » n'est
+// pas l'agenda complet : les annonces ★ ne sont pas demandées).
+const CAL_IMPORTANCE = [2, 3];
+function libelleImportanceCal() {
+  const exclues = [1, 2, 3].filter(n => !CAL_IMPORTANCE.includes(n));
+  return 'Importance demandée : ' + CAL_IMPORTANCE.map(n => '★'.repeat(n)).join(' et ')
+    + (exclues.length ? ' (pas les annonces ' + exclues.map(n => '★'.repeat(n)).join(', ') + ')' : '');
+}
 let S_calZone   = 'ALL';
 let S_calPeriod = 'week';
 let S_calBuilt  = false;
@@ -142,6 +154,22 @@ async function signerChemins(chemins,duree=3600){
 // (app prête, pas de session, ou échec → retour au formulaire).
 function afficherChargement(oui){document.documentElement.classList.toggle('demarrage',!!oui);}
 
+// v=6 (UX-22) — Message de connexion qui doit survivre au rechargement : la
+// déconnexion automatique d'un compte sans espace déclenche SIGNED_OUT, qui
+// recharge la page (voir bootAuth). On le garde le temps d'un rechargement.
+const CLE_MSG_CONNEXION='tt_msg_connexion';
+function memoriserMessageConnexion(texte){try{sessionStorage.setItem(CLE_MSG_CONNEXION,texte);}catch(_){}}
+function oublierMessageConnexion(){try{sessionStorage.removeItem(CLE_MSG_CONNEXION);}catch(_){}}
+function afficherMessageMemorise(){
+  let texte=null;
+  try{texte=sessionStorage.getItem(CLE_MSG_CONNEXION);}catch(_){}
+  oublierMessageConnexion();
+  if(!texte)return false;
+  showAuthForm('login');
+  showAuthMsg('login','error',texte);
+  return true;
+}
+
 // ════════════════════════════════════════════════════════════════════
 // AUTH MODULE
 // ════════════════════════════════════════════════════════════════════
@@ -164,17 +192,31 @@ function showAuthMsg(formId,type,text){
   el.textContent=text;
 }
 
+// v=6 (constat 73) : tout en français. Panne réseau = status 0 (fetch rejeté) ou
+// message du navigateur (Chrome « Failed to fetch », Safari « Load failed »,
+// Firefox « NetworkError… ») ; jamais le nom AuthRetryableFetchError, qui couvre
+// aussi les 5xx. Message inconnu : texte brut en console, pas à l'écran.
 function translateAuthError(err){
-  const msg=(err?.message||err||'').toString();
+  const msg=(err?.message||(typeof err==='string'?err:'')).toString();
   if(msg.includes('Invalid login credentials'))return 'Email ou mot de passe incorrect.';
   if(msg.includes('Email not confirmed'))return 'Email non confirmé.';
   if(msg.includes('User already registered'))return 'Cet email est déjà inscrit. Connecte-toi.';
   if(msg.includes('Password should be at least'))return 'Mot de passe trop court (8 caractères minimum).';
   if(msg.includes('not allowed to sign up'))return 'Cet email n\'est pas autorisé. Contacte l\'administrateur.';
-  if(msg.includes('Database error saving new user'))return 'Cet email n\'est pas autorisé. Contacte l\'administrateur.';
-  if(msg.includes('rate limit'))return 'Trop de tentatives, réessaie dans quelques minutes.';
-  if(msg.includes('Network'))return 'Problème de connexion réseau.';
-  return msg||'Erreur inconnue.';
+  // Message générique de GoTrue pour TOUTE erreur à la création du compte : le
+  // refus de la liste blanche est la cause probable, pas la seule.
+  if(msg.includes('Database error saving new user'))return 'Inscription refusée par le serveur (email non autorisé ou erreur technique). Contacte l\'administrateur.';
+  // v=6 (revue) : motifs connus du serveur d'authentification (avant : « Erreur inattendue,
+  // réessaie », alors qu'un nouvel essai immédiat échoue encore)
+  const code=err?.code||'',attente=/only request this after (\d+) seconds?/i.exec(msg);
+  if(attente)return 'Trop de demandes : réessaie dans '+attente[1]+' secondes.';
+  if(code==='same_password'||/different from the old password/i.test(msg))return 'Le nouveau mot de passe doit être différent de l\'ancien.';
+  if(code==='weak_password'||/password is known to be weak|weak password/i.test(msg))return 'Mot de passe trop faible : choisis-en un plus long ou moins courant.';
+  if(code==='email_address_invalid'||/email address .* is invalid|invalid format/i.test(msg))return 'Adresse email invalide.';
+  if(msg.includes('rate limit')||/rate_limit/.test(code)||err?.status===429)return 'Trop de tentatives, réessaie dans quelques minutes.';
+  if(err?.status===0||/Failed to fetch|Load failed|NetworkError|network/i.test(msg))return 'Problème de connexion réseau. Vérifie ta connexion et réessaie.';
+  console.warn('Erreur d\'authentification non traduite :',err);
+  return 'Erreur inattendue, réessaie.';
 }
 
 function passwordStrength(pwd){
@@ -206,7 +248,7 @@ async function doLogin(){
   try{
     const{data,error}=await sb.auth.signInWithPassword({email,password});
     if(error)throw error;
-    showAuthMsg('login','success','Connexion réussie !');
+    showAuthMsg('login','info','Connexion…'); // v=6 : pas de « réussie » avant d'être entré
     afficherChargement(true);
     await postLogin();
   }catch(e){
@@ -303,8 +345,23 @@ async function postLogin() {
   // v=5 : Chart.js (tableau de bord) se télécharge pendant que les données
   // arrivent, sans rien bloquer ; les graphiques l'attendent s'il le faut.
   chargerBiblio('chart').catch(() => {});
-  const { data: { user } } = await sb.auth.getUser();
-  if (!user) { afficherChargement(false); return; }
+  // v=6 (constat 66) : getUser en échec (supabase-js rend l'erreur sans lever) est
+  // dit, au lieu d'un retour muet au formulaire. Réseau ou serveur (status 0,
+  // absent ou ≥ 500) : session gardée. Session refusée : oubliée sur cet appareil
+  // (message gardé pour le rechargement que provoque la déconnexion).
+  let rep;
+  try { rep = await sb.auth.getUser(); } catch (e) { rep = { data: { user: null }, error: e }; }
+  const user = rep?.data?.user, uErr = rep?.error;
+  if (!user) {
+    afficherChargement(false);
+    console.error('Session non ouverte :', uErr);
+    const reseau = !uErr || !uErr.status || uErr.status >= 500;
+    const motif = reseau ? 'Connexion au serveur impossible. Vérifie ta connexion et réessaie.' : 'Ta session n\'est plus valide. Reconnecte-toi.';
+    showAuthForm('login');
+    showAuthMsg('login', 'error', motif);
+    if (!reseau) { memoriserMessageConnexion(motif); await sb.auth.signOut({ scope: 'local' }); }
+    return;
+  }
   S.authUser = { id: user.id, email: user.email };
   S.isSuperAdmin = (user.app_metadata?.role === 'super_admin');
 
@@ -327,12 +384,26 @@ async function postLogin() {
     migrateLocalStorageToSupabase(),
     loadAvailableWorkspaces(),
   ]);
+  // v=6 (constat 65) : panne réseau ou serveur ≠ « aucun espace » : PAS de
+  // déconnexion (la session reste ; recharger rejoue l'ouverture), détail en console.
+  if (!S.workspaceId && S.workspaceEchec) {
+    afficherChargement(false);
+    console.error('Espace non chargé :', S.lastWorkspaceError);
+    showAuthForm('login');
+    showAuthMsg('login', 'error', 'Impossible de charger ton espace (réseau ou serveur). Ta session est gardée : recharge la page pour réessayer.');
+    return;
+  }
   if (!S.workspaceId) {
     afficherChargement(false);
     const reason = S.lastWorkspaceError
       ? ' (détail : ' + S.lastWorkspaceError + ')'
       : '';
-    showAuthMsg('login', 'err', 'Aucun workspace assigné à votre compte. Contacte l\'administrateur' + reason + '.');
+    // v=6 (UX-22) : message d'erreur lisible, dans le formulaire VISIBLE, et
+    // conservé au rechargement que provoque la déconnexion qui suit.
+    const msg = 'Aucun espace n\'est attribué à ton compte. Contacte l\'administrateur' + reason + '.';
+    memoriserMessageConnexion(msg);
+    showAuthForm('login');
+    showAuthMsg('login', 'error', msg);
     await sb.auth.signOut();
     return;
   }
@@ -401,22 +472,51 @@ function detectRecoveryFlow(){
   }
 }
 
+// v=6 (constat 74) : toute déconnexion demandée par CET onglet (bouton, compte sans
+// espace, session refusée) passe par sb.auth.signOut : elle est marquée volontaire.
+// Une autre (autre onglet, jeton refusé au rafraîchissement) recharge aussi la
+// page, mais le motif est gardé pour le formulaire, avec la fiche trade perdue.
+let _sortieVolontaire=false;
+const _signOutSb=sb.auth.signOut.bind(sb.auth);
+sb.auth.signOut=async(...a)=>{_sortieVolontaire=true;try{return await _signOutSb(...a);}finally{_sortieVolontaire=false;}};
+function motifSortieSubie(){
+  const fiche=document.getElementById('trade-modal');
+  const ouverte=!!fiche&&!fiche.classList.contains('hidden');
+  return 'Ta session a été fermée (déconnexion depuis un autre onglet ou session expirée).'+
+    (ouverte?' Une fiche trade était ouverte : ce qui n\'était pas enregistré est perdu.':'')+' Reconnecte-toi.';
+}
+
 // ════════════════════════════════════════════════════════════════════
 // AUTH BOOT — runs immediately
 // ════════════════════════════════════════════════════════════════════
 (async function bootAuth(){
   bindAuthUI();
   detectRecoveryFlow();
+  afficherMessageMemorise(); // v=6 : message laissé par la page précédente (UX-22)
   // Check existing session
-  const{data:{session}}=await sb.auth.getSession();
+  // v=6 : une session mémorisée qu'on ne peut pas vérifier (réseau, serveur) est dite,
+  // au lieu d'un formulaire muet qui se lit « déconnecté » ; une exception de
+  // getSession ne fige jamais l'écran d'attente.
+  let session=null,sErr=null;
+  try{const r=await sb.auth.getSession();session=r?.data?.session||null;sErr=r?.error||null;}
+  catch(e){sErr=e;}
   if(session&&!window.location.hash.includes('type=recovery')){
     // v=5 : « Chargement de ton espace… » reste affiché pendant le chargement ;
     // un échec ramène au formulaire (jamais d'écran d'attente figé).
     try{await postLogin();}
     catch(e){console.error('Démarrage interrompu :',e);}
-    finally{if(!document.getElementById('app-wrap').classList.contains('ready'))afficherChargement(false);}
+    finally{
+      if(!document.getElementById('app-wrap').classList.contains('ready'))afficherChargement(false);
+      oublierMessageConnexion(); // déjà affiché : pas de rechargement sur ce chemin
+    }
   }else{
     afficherChargement(false);
+    if(sErr&&!window.location.hash.includes('type=recovery')){
+      console.error('Session illisible :',sErr);
+      const reseau=!sErr.status||sErr.status>=500;
+      showAuthForm('login');
+      showAuthMsg('login','error',reseau?'Connexion au serveur impossible : ta session n\'a pas pu être vérifiée. Vérifie ta connexion et recharge la page.':'Ta session n\'est plus valide. Reconnecte-toi.');
+    }
   }
   // Listen for auth events
   sb.auth.onAuthStateChange((event,session)=>{
@@ -426,6 +526,7 @@ function detectRecoveryFlow(){
       showAuthForm('recovery');
     }
     if(event==='SIGNED_OUT'){
+      if(!_sortieVolontaire&&S.authUser)memoriserMessageConnexion(motifSortieSubie());
       location.reload();
     }
   });
@@ -452,6 +553,11 @@ function detectRecoveryFlow(){
 
 async function loadCurrentWorkspace() {
   S.lastWorkspaceError = null;
+  // v=6 (constat 65) : une ABSENCE (pas d'entrée, espace non attribué ou invisible)
+  // n'est pas un ÉCHEC (réseau, serveur, délai) : seule l'absence mène au message
+  // « aucun espace » et à la déconnexion (S.workspaceEchec, lu par postLogin).
+  S.workspaceEchec = false;
+  const absent = (m) => Object.assign(new Error(m), { absence: true });
 
   async function attempt() {
     // Étape 1 : récupérer uniquement workspace_id depuis allowed_emails
@@ -461,8 +567,8 @@ async function loadCurrentWorkspace() {
       .eq('email', S.authUser.email.toLowerCase())
       .maybeSingle();
     if (aeErr) throw new Error('allowed_emails: ' + (aeErr.message || aeErr.code || 'unknown'));
-    if (!ae) throw new Error('Aucune entrée dans la whitelist pour ' + S.authUser.email);
-    if (!ae.workspace_id) throw new Error('Whitelist trouvée mais workspace_id NULL');
+    if (!ae) throw absent('Aucune entrée dans la whitelist pour ' + S.authUser.email);
+    if (!ae.workspace_id) throw absent('Whitelist trouvée mais workspace_id NULL');
 
     // Étape 2 : charger les détails du workspace séparément
     // (la RLS de workspaces inclut is_super_admin() OR membership → fiable)
@@ -472,7 +578,7 @@ async function loadCurrentWorkspace() {
       .eq('id', ae.workspace_id)
       .maybeSingle();
     if (wsErr) throw new Error('workspaces: ' + (wsErr.message || wsErr.code || 'unknown'));
-    if (!ws) throw new Error('Workspace ' + ae.workspace_id + ' introuvable (RLS bloquante ?)');
+    if (!ws) throw absent('Workspace ' + ae.workspace_id + ' introuvable (RLS bloquante ?)');
 
     return { workspaceId: ae.workspace_id, workspace: ws };
   }
@@ -489,6 +595,7 @@ async function loadCurrentWorkspace() {
   } catch (e1) {
     console.warn('loadCurrentWorkspace attempt 1 failed:', e1.message);
     S.lastWorkspaceError = e1.message;
+    S.workspaceEchec = !e1.absence;
   }
 
   // Essai 2 après 500ms (couvre la propagation JWT post-signup)
@@ -500,10 +607,12 @@ async function loadCurrentWorkspace() {
     S.currentWorkspaceId = r.workspaceId;
     S.currentWorkspace = r.workspace;
     S.lastWorkspaceError = null;
+    S.workspaceEchec = false;
     return;
   } catch (e2) {
     console.error('loadCurrentWorkspace attempt 2 failed:', e2.message);
     S.lastWorkspaceError = e2.message;
+    S.workspaceEchec = !e2.absence;
   }
 }
 
@@ -614,6 +723,7 @@ async function loadAdminWorkspaces() {
     const sel = document.getElementById('admin-workspace-select');
     if (!sel) return;
     sel.innerHTML = '<option value="">— sélectionner —</option>';
+    sel._perime = false;
     (data || []).forEach(w => {
       const opt = document.createElement('option');
       opt.value = w.id;
@@ -622,8 +732,24 @@ async function loadAdminWorkspaces() {
       sel.appendChild(opt);
     });
   } catch (e) {
-    toast('Erreur chargement workspaces : ' + (e.message || ''), 'err');
+    toast('Liste des espaces non chargée : ' + messageErreur(e) + '.', 'err');
+    // v=6 (constat 72) : les compteurs déjà affichés restent, mais dits non à jour
+    const sel = document.getElementById('admin-workspace-select');
+    if (sel && !sel._perime) {
+      const o = document.createElement('option');
+      o.value = ''; o.disabled = true; o.textContent = '⚠ Compteurs non à jour (réseau ou serveur)';
+      sel.appendChild(o); sel._perime = true;
+    }
   }
+}
+
+// v=6 (constat 72) : « ↻ Rafraîchir », l'onglet Admin et la fin d'un ajout ou d'un
+// retrait relisent TOUT l'Admin : liste blanche, compteurs « N membre(s) · N
+// trade(s) » et « Vue active » (avant : la liste blanche seule ; compteurs et Vue
+// active restaient ceux de la connexion).
+async function rafraichirAdmin() {
+  await loadAvailableWorkspaces(); // d'abord : loadAdminUsers remplit « Vue active » avec
+  await Promise.all([loadAdminUsers(), loadAdminWorkspaces()]);
 }
 
 function onWorkspaceChoiceChange() {
@@ -652,7 +778,7 @@ async function initApp() {
       if (tab.dataset.s === 'currency') loadCurrencyReport();
       if (tab.dataset.s === 'calendar') loadCalendar();
       if (tab.dataset.s === 'macro') loadMacro();
-      if (tab.dataset.s === 'admin' && S.isSuperAdmin) { loadAdminUsers(); loadAdminWorkspaces(); }
+      if (tab.dataset.s === 'admin' && S.isSuperAdmin) rafraichirAdmin(); // v=6 (constat 72) : tout l'Admin relu
     });
   });
 
@@ -699,33 +825,34 @@ async function initApp() {
     if (un) un.textContent = S.authUser.email.split('@')[0].toUpperCase();
   }
 
-  // Premier rendu : filtre par mois courant
-  if (S_dashMonths.size > 0) {
-    applyDashFilter();
+  // Premier rendu : filtre par mois courant. v=6 (constat 3) : trades non lus →
+  // aucun rendu à zéro (message + Réessayer) ; tout échec de lecture est dit.
+  if (!_lus.has('trades')) {
+    afficherTradesIndisponibles();
   } else {
-    renderStats();
-    await renderCharts();
+    if (S_dashMonths.size > 0) {
+      applyDashFilter();
+    } else {
+      renderStats();
+      await renderCharts();
+    }
+    renderMonthly();
+    renderJournal();
   }
-  renderMonthly();
-  renderJournal();
+  updateWorkspaceBanner();
+  signalerEchecsLecture();
   S.appReady = true;
 }
 
 function getCSSVar(v){return getComputedStyle(document.documentElement).getPropertyValue(v).trim();}
 
+// v=6 (données honnêtes) : au changement de thème, on REDESSINE (même filtre, mêmes
+// couleurs par trade, grilles et info-bulles relues dans le nouveau thème). Avant :
+// les barres par trade étaient recolorées avec les totaux MENSUELS (une perte en
+// vert, un BE en rouge) et le dégradé de la courbe remplacé par un aplat. Sans
+// graphique affiché, rien à faire (et Chart.js n'est pas chargé pour rien).
 function updateChartColors(){
-  if(S.chartBal){
-    S.chartBal.data.datasets[0].borderColor=getCSSVar('--chart-line');
-    S.chartBal.data.datasets[0].backgroundColor=getCSSVar('--chart-fill');
-    ['x','y'].forEach(a=>{S.chartBal.options.scales[a].grid.color=getCSSVar('--chart-grid');S.chartBal.options.scales[a].ticks.color=getCSSVar('--chart-tick');});
-    S.chartBal.update();
-  }
-  if(S.chartRR){
-    const m=buildMonthlyRR();
-    S.chartRR.data.datasets[0].backgroundColor=m.map(x=>x.rr>=0?getCSSVar('--chart-bar-p'):getCSSVar('--chart-bar-n'));
-    ['x','y'].forEach(a=>{S.chartRR.options.scales[a].grid.color=getCSSVar('--chart-grid');S.chartRR.options.scales[a].ticks.color=getCSSVar('--chart-tick');});
-    S.chartRR.update();
-  }
+  if(S.chartBal||S.chartRR)redessinerGraphiques();
 }
 
 function toggleUserMenu(e){
@@ -735,25 +862,98 @@ function toggleUserMenu(e){
 function closeUserMenu(){document.getElementById('user-menu').classList.remove('open');}
 
 // ─── DATA LOADERS (V9b : filtrés par S.currentWorkspaceId pour la vue active) ───
+// v=6 (constat 3) : une lecture qui échoue n'est jamais un espace vide. Le chargeur
+// GARDE ce qui était affiché, note l'échec et rend false (avant : `error` ignoré,
+// « 0 trade », « workspace vide », « Vue : X ✅ »). « Aucun trade » et « espace
+// vide » restent réservés à une lecture réussie. Par lecture : null = lue ;
+// 'jamais' = échec sans lecture réussie avant ; 'perime' = échec, l'affichage
+// garde la dernière lecture réussie.
+const echecsLecture={users:null,accounts:null,trades:null,workspaces:null};
+const _lus=new Set();
+function noterLecture(k,error){
+  if(!error){echecsLecture[k]=null;_lus.add(k);return true;}
+  console.error('Lecture impossible ('+k+') :',error);
+  echecsLecture[k]=_lus.has(k)?'perime':'jamais';
+  return false;
+}
 async function loadUsers(){
   let q = sb.from('users').select('*').order('name');
   if (S.currentWorkspaceId) q = q.eq('workspace_id', S.currentWorkspaceId);
-  const{data}=await q;
+  const{data,error}=await q;
+  if(!noterLecture('users',error))return false;
   S.users=data||[];
+  remplirFiltreTraders();
+  return true;
+}
+function remplirFiltreTraders(){
   const sel=document.getElementById('f-usr');
   if(sel)sel.innerHTML='<option value="">Tous traders</option>'+S.users.map(u=>`<option value="${u.id}">${esc(u.name)}</option>`).join('');
 }
 async function loadAccounts(){
   let q = sb.from('accounts').select('*').eq('is_active',true).order('name');
   if (S.currentWorkspaceId) q = q.eq('workspace_id', S.currentWorkspaceId);
-  const{data}=await q;
+  const{data,error}=await q;
+  if(!noterLecture('accounts',error))return false;
   S.accounts=data||[];
+  return true;
 }
 async function loadTrades(){
   let q=sb.from('trades').select('*,users(name,color),accounts(name,type,currency,balance,risk_percent)').order('trade_date',{ascending:false}).order('created_at',{ascending:false});
   if (S.currentWorkspaceId) q = q.eq('workspace_id', S.currentWorkspaceId);
   if(S.accId!=='all')q=q.eq('account_id',S.accId);
-  const{data}=await q;S.trades=data||[];S.filtered=[...S.trades];
+  const{data,error}=await q;
+  if(!noterLecture('trades',error))return false;
+  S.trades=data||[];S.filtered=[...S.trades];
+  document.getElementById('dash-main')?.classList.remove('trades-indisponibles');
+  return true;
+}
+// Ce qui n'a pas pu être lu, en clair (bandeau et toast) ; '' si tout est lu.
+function resumeEchecsLecture(){
+  const T={
+    trades:['trades non chargés : rien n\'est affiché à leur place','trades non rafraîchis : l\'affichage date du dernier chargement réussi'],
+    accounts:['comptes non chargés','comptes non rafraîchis'],
+    users:['liste des traders non chargée','liste des traders non rafraîchie'],
+  };
+  return Object.keys(T).filter(k=>echecsLecture[k]).map(k=>T[k][echecsLecture[k]==='perime'?1:0]).join(' ; ');
+}
+function signalerEchecsLecture(){
+  const r=resumeEchecsLecture();
+  if(r)toast('Lecture impossible (réseau ou serveur) — '+r+'.','err');
+  return r;
+}
+// Trades jamais lus : ni zéros, ni « Aucun trade », ni graphique à la place (CSS).
+function afficherTradesIndisponibles(){
+  const html='<div class="empty"><h3>⚠ Trades non chargés</h3><p>Problème de réseau ou de serveur : rien n\'est affiché à la place de tes trades.</p>'+
+    '<p style="margin-top:10px"><button type="button" class="btn btn-amber btn-sm" onclick="reessayerChargement()">↻ Réessayer</button></p></div>';
+  ['stats-row','j-list'].forEach(id=>{const el=document.getElementById(id);if(el)el.innerHTML=html;});
+  document.getElementById('dash-main')?.classList.add('trades-indisponibles');
+}
+// Réaffiche journal et tableau de bord selon les filtres en cours, ou l'état « non chargés ».
+function afficherTrades(){
+  if(!_lus.has('trades')){afficherTradesIndisponibles();updateWorkspaceBanner();return;}
+  filterJournal();
+  applyDashFilter();
+}
+// Bouton « Réessayer » (bandeau, cadres « non chargés ») : relit traders, comptes et trades.
+async function reessayerChargement(){
+  await Promise.all([loadUsers(),loadAccounts(),loadTrades()]);
+  afficherTrades();
+  if(!signalerEchecsLecture())toast('Données chargées ✅','ok');
+}
+// Vue active et données affichées : photo prise avant un changement de vue, remise si une lecture échoue.
+function photoVue(){
+  return {currentWorkspaceId:S.currentWorkspaceId,currentWorkspace:S.currentWorkspace,accId:S.accId,
+    users:S.users,accounts:S.accounts,trades:S.trades,echecs:{...echecsLecture}};
+}
+function restaurerVue(p){
+  Object.assign(S,{currentWorkspaceId:p.currentWorkspaceId,currentWorkspace:p.currentWorkspace,accId:p.accId,users:p.users,accounts:p.accounts,trades:p.trades});
+  Object.assign(echecsLecture,p.echecs);
+  remplirFiltreTraders();
+  afficherTrades();
+  updateWorkspaceBadge();
+  updateWorkspaceBanner();
+  const sel=document.getElementById('admin-ws-selector');
+  if(sel)sel.value=p.currentWorkspaceId;
 }
 // Profil interne de la personne connectée (public.users, via auth_user_id).
 async function lireProfil(){
@@ -777,18 +977,33 @@ async function loadAvailableWorkspaces() {
     S.availableWorkspaces = S.workspace ? [S.workspace] : [];
     return;
   }
+  // v=6 (constat 3) : en cas d'échec, la liste connue est GARDÉE (au démarrage :
+  // l'espace d'appartenance seul, posé par postLogin) et « Vue active » le signale.
   try {
     const { data, error } = await sb.from('workspaces').select('id, name, is_shared').order('name');
     if (error) throw error;
     S.availableWorkspaces = data || [];
+    return noterLecture('workspaces', null);
   } catch (e) {
-    console.error('loadAvailableWorkspaces failed:', e);
-    S.availableWorkspaces = S.workspace ? [S.workspace] : [];
+    return noterLecture('workspaces', e);
   }
 }
 
-async function switchCurrentWorkspace(newWorkspaceId) {
+// v=6 (revue) : un seul changement d'espace à la fois. Deux changements rapprochés
+// (réseau lent) mêlaient les données de trois espaces sous un « ✅ ».
+let _changementVue = false;
+function remettreSelecteurVue() {
+  const sel = document.getElementById('admin-ws-selector');
+  if (sel) sel.value = S.currentWorkspaceId;
+}
+async function switchCurrentWorkspace(newWorkspaceId, abandonRapport) {
   if (!newWorkspaceId || newWorkspaceId === S.currentWorkspaceId) return;
+  if (_changementVue) { toast('Changement d\'espace déjà en cours : attends la fin.', 'err'); remettreSelecteurVue(); return; }
+  _changementVue = true;
+  try { return await changerEspace(newWorkspaceId, abandonRapport); }
+  finally { _changementVue = false; }
+}
+async function changerEspace(newWorkspaceId, abandonRapport) {
   // Le non-admin n'a pas le droit de switcher
   if (!S.isSuperAdmin && newWorkspaceId !== S.workspaceId) {
     toast('Action réservée à l\'administrateur', 'err');
@@ -796,19 +1011,27 @@ async function switchCurrentWorkspace(newWorkspaceId) {
   }
   const target = S.availableWorkspaces.find(w => w.id === newWorkspaceId);
   if (!target) { toast('Workspace introuvable', 'err'); return; }
+  // v=6 (constat 58) : la saisie du rapport ouvert part d'abord dans SON espace
+  if (!abandonRapport && !(await flushAndSaveBeforeSwitch())) {
+    remettreSelecteurVue(); // v=6 (revue) : « Annuler » laisse la vue telle quelle, sélecteur compris
+    proposerAbandon(() => switchCurrentWorkspace(newWorkspaceId, true)); return;
+  }
 
+  const avant = photoVue(); // v=6 (constat 3) : remise en place si une lecture échoue
   // MAJ état
   S.currentWorkspaceId = newWorkspaceId;
   S.currentWorkspace = target;
   S.accId = 'all'; // reset filter compte (les comptes vont changer)
+  // v=6 (constat 58) : le rapport affiché était celui de l'ancien espace
+  quitterRapport();
+  if (document.getElementById('sec-currency')?.classList.contains('active')) chargerRapport();
 
   // Recharger les données filtrées
   toast('Chargement de ' + target.name + '…', 'ok');
   try {
-    await Promise.all([loadUsers(), loadAccounts()]);
-    await loadTrades();
-    // Re-render (réutilise applyDashFilter qui couvre stats + charts + monthly + journal)
-    applyDashFilter();
+    const lus = await Promise.all([loadUsers(), loadAccounts()]);
+    // Re-render selon les filtres en cours (stats + charts + monthly + journal)
+    if (lus.includes(false) || !(await rechargerTrades(false))) throw new Error('lecture impossible : ' + resumeEchecsLecture());
     updateWorkspaceBadge();
     updateWorkspaceBanner();
     // Refresh sélecteur dans admin
@@ -817,7 +1040,19 @@ async function switchCurrentWorkspace(newWorkspaceId) {
     toast('Vue : ' + target.name + ' ✅', 'ok');
   } catch (e) {
     console.error('switchCurrentWorkspace failed:', e);
-    toast('Erreur lors du changement de workspace', 'err');
+    // v=6 (revue) : la saisie tapée dans le rapport affiché pendant le chargement part
+    // d'abord dans SON espace ; si c'est impossible, sa perte est dite.
+    const rapportEcrit = await flushAndSaveBeforeSwitch();
+    // v=6 (constat 3) : retour à la vue d'avant, données comprises (jamais les
+    // traders de l'une avec les trades de l'autre), et l'échec est dit, sans ✅.
+    restaurerVue(avant);
+    // v=6 (constats 3 + 58) : le rapport suit la vue remise en place (sinon il resterait
+    // celui de l'espace qu'on n'a pas pu ouvrir, et la saisie partirait dans cet espace)
+    quitterRapport();
+    if (document.getElementById('sec-currency')?.classList.contains('active')) chargerRapport();
+    const lecture = String(e?.message || '').startsWith('lecture impossible');
+    toast('Impossible de charger ' + target.name + (lecture ? ' (réseau ou serveur)' : '') + ' : tu restes sur ' + (S.currentWorkspace?.name || '?') + '.' +
+      (rapportEcrit ? '' : ' Ta saisie du rapport (' + target.name + ') n\'a pas pu être enregistrée.'), 'err');
   }
 }
 
@@ -837,10 +1072,12 @@ function updateWorkspaceBadge() {
 
   // Tooltip explicatif
   if (isViewing) {
-    wsBadge.title = 'Tu consultes : ' + S.currentWorkspace.name +
-      '\nTon workspace d\'appartenance : ' + (S.workspace ? S.workspace.name : '?') +
-      '\nLes nouveaux trades que tu crées iront dans ton workspace d\'appartenance.' +
-      (S.isSuperAdmin ? '\n\nClique pour revenir à ton workspace.' : '');
+    // v=6 (constat 68) : même règle que le bandeau, où va chaque écriture
+    wsBadge.title = 'Vue d\'un autre espace : ' + S.currentWorkspace.name +
+      '\nTon espace : ' + (S.workspace ? S.workspace.name : '?') +
+      '\nCe que tu modifies ici (trades existants, rapports) est enregistré dans ' + S.currentWorkspace.name + '.' +
+      '\nPour créer un trade ou des données test, reviens à ton espace.' +
+      (S.isSuperAdmin ? '\n\nClique pour revenir à ton espace.' : '');
   } else {
     wsBadge.title = S.isSuperAdmin
       ? 'Workspace courant : ' + S.currentWorkspace.name + ' (en tant qu\'admin, tu peux changer de vue via l\'onglet Admin)'
@@ -863,15 +1100,30 @@ function updateWorkspaceBanner() {
   const msg = document.getElementById('ws-context-msg');
   const actions = document.getElementById('ws-context-actions');
   if (!banner || !msg || !actions) return;
+
+  // v=6 (constat 3) : une lecture a échoué → on le dit (même bandeau masqué) ;
+  // jamais « vide ». Trades jamais lus : l'état « non chargés » repasse par-dessus
+  // un rendu à zéro (ce bandeau est le dernier rendu d'applyDashFilter).
+  const echec = resumeEchecsLecture();
+  if (echec) {
+    banner.style.display = 'block';
+    msg.innerHTML = '<b style="color:var(--red)">⚠ Lecture impossible (réseau ou serveur)</b> — ' + esc(echec) + '.';
+    actions.innerHTML = '<button type="button" class="btn btn-amber btn-sm" onclick="reessayerChargement()">↻ Réessayer</button>';
+    if (echecsLecture.trades === 'jamais') afficherTradesIndisponibles();
+    return;
+  }
   if (_wsBannerDismissed) { banner.style.display = 'none'; return; }
 
-  // Cas 1 : on est en mode "vue" différente du workspace d'appartenance
+  // Cas 1 : on est en mode "vue" différente du workspace d'appartenance.
+  // v=6 (constat 68) : dire où va chaque écriture (avant : « Mode consultation »,
+  // alors que les trades existants et les rapports modifiés ici sont enregistrés
+  // dans l'espace affiché ; créer un trade ou des données test y est refusé).
   if (S.currentWorkspaceId !== S.workspaceId) {
     banner.style.display = 'block';
-    msg.innerHTML = '<b>Mode consultation</b> — Tu visualises ' +
+    msg.innerHTML = '<b>Vue d\'un autre espace</b> — Tu visualises ' +
       '<b style="color:var(--blue)">' + esc(S.currentWorkspace?.name || '?') + '</b>' +
-      '. Tes nouveaux trades iront dans ton workspace d\'appartenance (' +
-      esc(S.workspace?.name || '?') + ').';
+      '. Ce que tu modifies ou supprimes ici (trades existants, rapports) est enregistré dans cet espace. ' +
+      'Pour créer un trade ou des données test, reviens à ton espace (' + esc(S.workspace?.name || '?') + ').';
     actions.innerHTML = '<button type="button" class="btn btn-amber btn-sm" onclick="switchCurrentWorkspace(\'' +
       esc(S.workspaceId) + '\')">⟲ Revenir à mon workspace</button>';
     return;
@@ -904,8 +1156,10 @@ function dismissWorkspaceBanner() {
 function populateAdminWorkspaceSelector() {
   const sel = document.getElementById('admin-ws-selector');
   if (!sel) return;
+  // v=6 (constat 3) : liste des espaces illisible → dit, pas une liste réduite muette.
+  const indispo = echecsLecture.workspaces ? '<option value="" disabled>⚠ Liste des espaces indisponible (réseau ou serveur) — ↻ Rafraîchir</option>' : '';
   if (!S.availableWorkspaces || S.availableWorkspaces.length === 0) {
-    sel.innerHTML = '<option value="">Aucun workspace disponible</option>';
+    sel.innerHTML = indispo || '<option value="">Aucun workspace disponible</option>';
     return;
   }
   // Trier : workspace d'appartenance en premier, puis le reste par ordre alphabétique
@@ -919,7 +1173,7 @@ function populateAdminWorkspaceSelector() {
     const icon = w.is_shared ? '👥' : '🔒';
     const homeTag = isHome ? ' · ⭐ mon workspace' : '';
     return `<option value="${esc(w.id)}"${w.id === S.currentWorkspaceId ? ' selected' : ''}>${icon} ${esc(w.name)}${homeTag}</option>`;
-  }).join('');
+  }).join('') + indispo;
   // Afficher le nom du workspace d'appartenance dans la note
   const homeName = document.getElementById('admin-ws-home-name');
   if (homeName && S.workspace) homeName.textContent = S.workspace.name;
@@ -958,13 +1212,12 @@ function handleGlobalPaste(e){
   // Trade modal ?
   const modal=document.getElementById('trade-modal');
   if(modal&&!modal.classList.contains('hidden')){
-    const activeTab=document.querySelector('.modal-tab.active');
-    const tabIdx=Array.from(document.querySelectorAll('.modal-tab')).indexOf(activeTab);
-    const type=tabIdx===1?'entry':tabIdx===2?'close':'file';
-    S.pendingUps.push({file:imgFile,type});
-    const c=document.getElementById('prev-'+type)||document.getElementById('prev-file');
-    if(c){const r=new FileReader();r.onload=ev=>{const img=document.createElement('img');img.src=ev.target.result;img.className='img-thumb';img.onclick=()=>bigImg(ev.target.result);c.appendChild(img);};r.readAsDataURL(imgFile);}
-    toast('Image collée ✅','ok');
+    // v=6 (données honnêtes) : la capture va dans la grille VISIBLE de l'onglet ouvert, et le
+    // message nomme la destination. Avant : collée depuis « Analyse » (onglet par défaut), elle
+    // partait dans une grille cachée, invisible à la saisie comme à la réouverture.
+    const onglet=S.ongletFiche||0,type=['file','entry','close'][onglet];
+    S.pendingUps.push({file:imgFile,type});apercuCapture(imgFile,type);
+    toast(`Capture ajoutée à l'onglet ${['Analyse','Exécution','Clôture'][onglet]} (envoyée à la sauvegarde)`,'ok');
     e.preventDefault();
   }
 }
@@ -980,8 +1233,52 @@ function initChartResize(){
 
 // ─── UTILS ───
 function bigImg(url){document.getElementById('img-big').src=url;document.getElementById('img-ov').classList.remove('hidden');}
-function fDate(d){if(!d)return'—';return new Date(d).toLocaleDateString('fr-FR',{day:'2-digit',month:'2-digit',year:'2-digit'});}
-function fDateShort(d){if(!d)return'';return new Date(d).toLocaleDateString('fr-FR',{month:'short',year:'2-digit'});}
+// v=6 : une date « AAAA-MM-JJ » (sans heure) se lit en heure LOCALE ; new Date('AAAA-MM-JJ')
+// la lit à minuit UTC, donc la veille à l'ouest de Greenwich (mauvais jour, mauvais mois).
+function dateLocale(d){const m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(d||'');return m?new Date(+m[1],+m[2]-1,+m[3]):new Date(d);}
+function fDate(d){if(!d)return'—';return dateLocale(d).toLocaleDateString('fr-FR',{day:'2-digit',month:'2-digit',year:'2-digit'});}
+function fDateShort(d){if(!d)return'';return dateLocale(d).toLocaleDateString('fr-FR',{month:'short',year:'2-digit'});}
+
+// ════════════════════════════════════════════════════════════════════
+// v=6 — DONNÉES HONNÊTES : sources uniques (une absence n'est jamais un 0)
+// ════════════════════════════════════════════════════════════════════
+// Date d'un trade (jour de trade, sinon jour de saisie), en heure locale.
+function dateDuTrade(t){return t&&t.trade_date?dateLocale(t.trade_date):new Date(t&&t.created_at);}
+// Ordre chronologique ; à date égale, ordre de saisie (avant : inversé, la courbe
+// inventait un parcours qui n'avait pas eu lieu).
+function ordreChrono(a,b){return (dateDuTrade(a)-dateDuTrade(b))||(new Date(a.created_at)-new Date(b.created_at));}
+// R réalisé SAISI (0 compris = break-even). null / vide = résultat non saisi : ce
+// n'est PAS un BE, le trade est mis à part (arbitrage du 20/10/2026).
+function aResultat(t){const v=t&&t.actual_rr;return v!==null&&v!==undefined&&v!==''&&!isNaN(+v);}
+// P&L saisi (0 compris) ; null / vide = non saisi, jamais « $0 ».
+function aPnl(t){const v=t&&t.pnl_amount;return v!==null&&v!==undefined&&v!==''&&!isNaN(+v);}
+// Trades qui comptent dans les statistiques et les graphiques : ni annulés, ni de
+// test (arbitrage du 20/10/2026 ; les tests restent visibles dans le Journal).
+function tradesComptes(trades){return (trades||[]).filter(t=>t.status!=='cancelled'&&!t.is_test);}
+// Nombre saisi : « 1,5 » ou « 1.5 » (virgule ou point décimal). '' → null (non
+// renseigné) ; tout le reste (espaces, deux séparateurs, lettres) → NaN, à refuser.
+// Avant : un Chrome en anglais lisait « 1,5 » comme 15, enregistré sans alerte.
+function lireDecimal(v){
+  const s=String(v==null?'':v).trim();
+  if(s==='')return null;
+  if(!/^[-+]?(\d+([.,]\d+)?|[.,]\d+)$/.test(s))return NaN;
+  return parseFloat(s.replace(',','.'));
+}
+// Après toute écriture de trades : recharger puis réafficher selon les filtres EN
+// COURS (mois du tableau de bord, filtres du journal). Avant : retour silencieux à
+// « ALL TIME » avec le mois toujours surligné, et filtres du journal ignorés.
+// v=6 (constat 3) : lecture en échec → l'affichage garde les derniers trades lus
+// (ou l'état « non chargés ») et l'échec est dit, sans taire l'écriture réussie
+// qui précède (tous les appelants rechargent après une écriture faite) ; rend
+// false. `signaler` = false quand l'appelant annonce lui-même l'échec (vue).
+async function rechargerTrades(signaler=true){
+  await loadTrades();
+  filterJournal();
+  applyDashFilter(); // trades jamais lus : le bandeau (dernier rendu) remet l'état « non chargés »
+  const lu=!echecsLecture.trades;
+  if(!lu&&signaler)toast('Modification enregistrée, mais lecture impossible (réseau ou serveur) — '+resumeEchecsLecture()+'.','err');
+  return lu;
+}
 // V9.2 FIX FUSEAU : helpers qui formatent une Date en LOCAL (pas UTC).
 // Avant : on utilisait d.toISOString().slice(0,7) → bug de fuseau qui décalait
 // le mois pour Paris (UTC+2 en été) → "MAI 26" renvoyait "2026-04" en interne.
@@ -989,6 +1286,9 @@ function fmtYM(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'
 function fmtYMD(d){return fmtYM(d)+'-'+String(d.getDate()).padStart(2,'0');}
 // FND-11 : on echappe aussi " et ' — un texte utilisateur place dans un attribut
 // (title="...", value="...") ne doit pas pouvoir en sortir.
+// v=6 (revue) : une couleur venue de la base ou d'un autre navigateur (trader, présence)
+// est un champ libre rendu dans un attribut style : seule une couleur hexadécimale passe.
+function couleurSure(c,defaut){return /^#[0-9a-f]{3,8}$/i.test(String(c||''))?String(c):defaut;}
 function esc(s){return(s==null?'':s).toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 // Argument JS passe dans un onclick="f(...)" : JSON d'abord (litteral JS valide),
 // puis HTML. S'ecrit SANS guillemets autour : onclick="f(${escJs(x)})".
@@ -996,7 +1296,55 @@ function esc(s){return(s==null?'':s).toString().replace(/&/g,'&amp;').replace(/<
 function escJs(s){return esc(JSON.stringify(s==null?'':String(s)));}
 // URL d'un href : http/https uniquement (esc seul laisse passer javascript:).
 function safeUrl(u){const s=(u==null?'':String(u)).trim();return /^https?:\/\//i.test(s)?esc(s):'#';}
-function toast(msg,type='ok'){const t=document.getElementById('toast');t.textContent=msg;t.className='show '+type;clearTimeout(t._t);t._t=setTimeout(()=>t.className='',3400);}
+// v=6 (constat 69) : un avertissement ('err') reste lisible : 8 s, fermeture au
+// clic, et un message qui arrive AVANT ta prochaine action (clic, toucher, touche)
+// attend son tour au lieu de l'écraser (avant : un seul emplacement, « 7 trades
+// test insérés ✅ » effaçait l'avertissement aussitôt). Après ton action, le
+// message suivant le remplace normalement. En attente, seul le dernier message
+// ordinaire est gardé (un « Chargement… » dépassé ne réapparaît pas).
+const _toastsEnAttente=[];
+function toast(msg,type='ok'){
+  const t=document.getElementById('toast');if(!t)return;
+  if(t._protege){
+    if(type!=='err')for(let i=_toastsEnAttente.length-1;i>=0;i--)if(_toastsEnAttente[i][1]!=='err')_toastsEnAttente.splice(i,1);
+    _toastsEnAttente.push([msg,type]);return;
+  }
+  montrerToast(t,msg,type);
+}
+function montrerToast(t,msg,type){
+  t.textContent=msg;t.className='show '+type;t._protege=type==='err';
+  t.title=t._protege?'Clique pour fermer':'';t.onclick=t._protege?()=>fermerToast(t):null;
+  clearTimeout(t._t);t._t=setTimeout(()=>fermerToast(t),t._protege?8000:3400);
+}
+function fermerToast(t){
+  clearTimeout(t._t);t.className='';t._protege=false;t.onclick=null;
+  const suivant=_toastsEnAttente.shift();
+  if(suivant)montrerToast(t,suivant[0],suivant[1]);
+}
+// Ta prochaine action lève la protection : le message en attente passe (sinon le
+// suivant remplacera l'avertissement). Un clic SUR le message le ferme (onclick).
+function actionUtilisateur(e){
+  const t=document.getElementById('toast');
+  if(!t||!t._protege||(e&&e.target&&t.contains(e.target)))return;
+  t._protege=false;
+  if(_toastsEnAttente.length)fermerToast(t);
+}
+document.addEventListener('pointerdown',actionUtilisateur,true);
+document.addEventListener('keydown',actionUtilisateur,true);
+// v=6 (constat 69) : cause d'un échec d'écriture en français ; le détail technique
+// reste en console (avant : « Erreur : duplicate key value violates… » à l'écran).
+function messageErreur(e){
+  console.error(e);
+  const code=String(e?.code||''),msg=String(e?.message||'');
+  if(code==='23505')return 'cette valeur existe déjà';
+  if(code==='22P02')return 'valeur refusée par le serveur (format invalide)';
+  if(code==='42501'||/permission denied|row-level security/i.test(msg))return 'action non autorisée pour ton compte';
+  if(code==='23503')return 'élément lié à d\'autres données';
+  if(code==='PGRST116')return 'élément introuvable';
+  if(code==='P0001'&&msg)return 'refusé par le serveur ('+msg+')'; // RAISE d'une fonction SQL du projet : motif voulu
+  if(/Failed to fetch|Load failed|NetworkError|network/i.test(msg))return 'problème de connexion réseau';
+  return 'erreur inattendue du serveur';
+}
 
 // ─── CONFIRM ───
 function showConfirm(title,msg,cb,okLabel='Confirmer'){S.confirmCb=cb;document.getElementById('confirm-title').textContent=title;document.getElementById('confirm-msg').textContent=msg;document.getElementById('confirm-ok').textContent=okLabel;document.getElementById('confirm-overlay').classList.remove('hidden');}
@@ -1009,54 +1357,91 @@ function execConfirm(){const cb=S.confirmCb;closeConfirm();if(cb)cb();}
 // ════════════════════════════════════════════════════════════════════
 
 // ─── SPEEDOMETER ───
+// v=6 (données honnêtes) : pct null = taux inconnu (aucun trade jugé) → arc
+// grisé, SANS aiguille. Avant : aiguille au départ du rouge, lue « 0 % ».
 function speedometerHTML(pct,label){
+  const inconnu=pct==null||isNaN(pct);
   const r=34,cx=40,cy=40,startAngle=-200,endAngle=20;
   const toRad=d=>d*Math.PI/180;
   const arcPath=(cx,cy,r,startDeg,endDeg)=>{const s=toRad(startDeg),e=toRad(endDeg);const x1=cx+r*Math.cos(s),y1=cy+r*Math.sin(s),x2=cx+r*Math.cos(e),y2=cy+r*Math.sin(e);const lg=endDeg-startDeg>180?1:0;return `M${x1},${y1} A${r},${r},0,${lg},1,${x2},${y2}`;};
   const totalArc=endAngle-startAngle;
   const zones=[{pct:0.33,color:'#cc2a42'},{pct:0.33,color:'#d48c00'},{pct:0.34,color:'#00a86b'}];
   let zoneStart=startAngle;
-  const zoneArcs=zones.map(z=>{const zEnd=zoneStart+z.pct*totalArc;const path=arcPath(cx,cy,r,zoneStart,zEnd);zoneStart=zEnd;return `<path d="${path}" fill="none" stroke="${z.color}" stroke-width="5" stroke-linecap="round" opacity="0.7"/>`;}).join('');
-  const needleAngle=startAngle+(pct/100)*totalArc;const nr=toRad(needleAngle);
+  const zoneArcs=zones.map(z=>{const zEnd=zoneStart+z.pct*totalArc;const path=arcPath(cx,cy,r,zoneStart,zEnd);zoneStart=zEnd;return `<path d="${path}" fill="none" stroke="${z.color}" stroke-width="5" stroke-linecap="round" opacity="${inconnu?'0.2':'0.7'}"/>`;}).join('');
+  const needleAngle=startAngle+((inconnu?0:pct)/100)*totalArc;const nr=toRad(needleAngle);
   const nx=cx+28*Math.cos(nr),ny=cy+28*Math.sin(nr);
   const backNx=cx-8*Math.cos(nr),backNy=cy-8*Math.sin(nr);
+  const aiguille=inconnu?'':`<line x1="${backNx}" y1="${backNy}" x2="${nx}" y2="${ny}" stroke="var(--amber2)" stroke-width="2" stroke-linecap="round"/>
+      <circle cx="${cx}" cy="${cy}" r="3" fill="var(--amber)" stroke="var(--bg2)" stroke-width="1"/>`;
   return `<div class="speedometer">
     <svg viewBox="0 0 80 48" overflow="visible">
       <path d="${arcPath(cx,cy,r,startAngle,endAngle)}" fill="none" stroke="var(--bg4)" stroke-width="5"/>
       ${zoneArcs}
-      <line x1="${backNx}" y1="${backNy}" x2="${nx}" y2="${ny}" stroke="var(--amber2)" stroke-width="2" stroke-linecap="round"/>
-      <circle cx="${cx}" cy="${cy}" r="3" fill="var(--amber)" stroke="var(--bg2)" stroke-width="1"/>
+      ${aiguille}
     </svg>
     <div class="spd-val">${label}</div>
   </div>`;
 }
 
 // ─── STATS ───
+// v=6 (données honnêtes) : un trade clos SANS R réalisé saisi est mis à part
+// (arbitrage du 20/10/2026) : hors WIN/BE/LOSS, total R, taux et moyennes ; le
+// panneau le compte pour qu'on le complète dans le Journal. Avant : rangé en BE
+// (0 R) et compté au dénominateur du taux (1 gagnant + 1 non saisi = « 50 % »).
+// v=6 (constat 10) : `trades` = tous les trades de la période ; les annulés et les
+// trades de TEST sont écartés ici (arbitrage 3), les tests comptés pour la mention.
 function calcStats(trades){
-  const closed=trades.filter(t=>t.status==='closed');
-  const winsArr=closed.filter(t=>(+t.actual_rr||0)>0);
-  const lossesArr=closed.filter(t=>(+t.actual_rr||0)<0);
+  const nbTest=trades.filter(t=>t.is_test&&t.status!=='cancelled').length;
+  const comptes=tradesComptes(trades);
+  const closed=comptes.filter(t=>t.status==='closed');
+  const juges=closed.filter(aResultat);
+  const sansR=closed.length-juges.length;
+  const winsArr=juges.filter(t=>+t.actual_rr>0);
+  const lossesArr=juges.filter(t=>+t.actual_rr<0);
   const wins=winsArr.length;
   const losses=lossesArr.length;
-  const be=closed.filter(t=>(+t.actual_rr||0)===0).length;
-  const totalRR=closed.reduce((s,t)=>s+(+t.actual_rr||0),0);
-  const totalPnL=closed.reduce((s,t)=>s+(+t.pnl_amount||0),0);
-  const winRate=closed.length>0?(wins/closed.length)*100:0;
+  const be=juges.filter(t=>+t.actual_rr===0).length;
+  // v=6 : arrondi au milliardième (bruit flottant : 0.3-0.1-0.2 donnait « -0.00 R » en rouge).
+  const totalRR=Math.round(juges.reduce((s,t)=>s+(+t.actual_rr),0)*1e9)/1e9;
+  // Aucun trade jugé : taux INCONNU (null → « — », sans aiguille), jamais « 0 % ».
+  const winRate=juges.length>0?(wins/juges.length)*100:null;
   // V9.6 — RR moyens par catégorie (gagnants / perdants)
   //   avgWinRR  : moyenne des actual_rr sur les trades gagnants
   //   avgLossRR : moyenne des actual_rr sur les trades perdants (valeur négative)
-  const avgWinRR =wins>0  ? winsArr  .reduce((s,t)=>s+(+t.actual_rr||0),0)/wins   : 0;
-  const avgLossRR=losses>0? lossesArr.reduce((s,t)=>s+(+t.actual_rr||0),0)/losses : 0;
-  const acc=S.accId!=='all'?S.accounts.find(a=>a.id===S.accId):S.accounts[0];
-  const bal=acc?+acc.balance:15000;
-  return{total:trades.length,closed:closed.length,wins,losses,be,totalRR,totalPnL,pnlPct:bal>0?(totalPnL/bal)*100:0,winRate,avgWinRR,avgLossRR};
+  const avgWinRR =wins>0  ? winsArr  .reduce((s,t)=>s+(+t.actual_rr),0)/wins   : 0;
+  const avgLossRR=losses>0? lossesArr.reduce((s,t)=>s+(+t.actual_rr),0)/losses : 0;
+  // v=6 (constats 2, 11) : P&L = somme des P&L SAISIS (0 compris) des trades clos,
+  // par devise du compte, jamais additionnés entre devises (totalPnL null alors).
+  // Avant : un P&L non saisi valait 0 (« $0 ») et USD + EUR donnaient des « $ ».
+  const avecPnl=closed.filter(aPnl);
+  const pnlParDevise={};
+  avecPnl.forEach(t=>{const d=(t.accounts&&t.accounts.currency)||'';pnlParDevise[d]=(pnlParDevise[d]||0)+(+t.pnl_amount);});
+  const devises=Object.keys(pnlParDevise);
+  const devisePnl=devises.length===1?devises[0]:null;
+  const totalPnL=devisePnl!==null?pnlParDevise[devisePnl]:null;
+  // v=6 (constat 4, arbitrage 2) : % sur la SOMME des soldes des comptes actifs de
+  // cette devise ; null (« — ») si la somme est nulle, la devise inconnue ou multiple.
+  // Avant : solde du 1er compte par nom, ou 15 000 inventés sans compte chargé.
+  const base=devisePnl?S.accounts.filter(a=>a.is_active!==false&&a.currency===devisePnl).reduce((s,a)=>s+(+a.balance||0),0):0;
+  const pnlPct=totalPnL!==null&&base>0?(totalPnL/base)*100:null;
+  const ouverts=comptes.filter(t=>t.status==='open').length;
+  // v=6 (constat 12) : périmètre réel des chiffres (traders et comptes distincts).
+  const distincts=cle=>new Set(comptes.map(t=>t[cle]).filter(v=>v!=null&&v!=='')).size;
+  return{nbTraders:distincts('user_id'),nbComptes:distincts('account_id'),total:comptes.length,closed:closed.length,juges:juges.length,sansR,ouverts,nbTest,wins,losses,be,totalRR,nbPnl:avecPnl.length,pnlParDevise,devisePnl,totalPnL,pnlPct,winRate,avgWinRR,avgLossRR};
+}
+
+// v=6 (constat 11) : montant signé dans la devise de son compte (Intl, fr-FR :
+// « +1 250 $US », « -80 € »). Code illisible : nombre suivi du code ; devise
+// inconnue (trade sans compte) : dit tel quel. Avant : « $ » écrit en dur.
+function fmtMontant(v,devise){
+  const n=Math.round(v*100)/100;const signe=n>0?'+':(n<0?'-':'');
+  if(devise){try{return signe+new Intl.NumberFormat('fr-FR',{style:'currency',currency:devise,minimumFractionDigits:0,maximumFractionDigits:2}).format(Math.abs(n));}catch(e){/* code ISO invalide */}}
+  return signe+Math.abs(n).toLocaleString('fr-FR',{maximumFractionDigits:2})+(devise?' '+devise:' (devise inconnue)');
 }
 
 function renderStats() {
-  const trades = S.trades.filter(t => t.status !== 'cancelled');
-  const st = calcStats(trades);
-  renderStatsPanel(st, 'ALL TIME');
-  calcAvgDuration(trades.filter(t => t.status === 'closed'));
+  const st = calcStats(S.trades); // v=6 : calcStats écarte annulés et tests
+  renderStatsPanel(st, 'ALL TIME', 'tout l\'historique');
 }
 
 
@@ -1068,22 +1453,67 @@ function renderStats() {
 // V8 — Fonctions importées de V7 (stats panel, charts segmentés, rich editor, calendrier, TJP)
 // ════════════════════════════════════════════════════════════════════
 
-function renderStatsPanel(st, label){
-  const rc=st.totalRR>=0?'pos':'neg';const sign=st.totalRR>=0?'+':'';
+// v=6 : `periode` = la période en toutes lettres, pour la phrase « Aucun trade clos sur … ».
+function renderStatsPanel(st, label, periode){
+  // v=6 : un total R nul est neutre (avant : « +0.00 » en vert).
+  // v=6 (revue) : signe et couleur pris sur la valeur AFFICHÉE (arrondie à 2 décimales ;
+  // -0 devient 0) : jamais « +0.00 » en vert ni « -0.00 » en rouge.
+  const r2=(v)=>+(+v).toFixed(2)||0;
+  const totAff=r2(st.totalRR);
+  const rc=totAff>0?'pos':(totAff<0?'neg':'');const sign=totAff>0?'+':'';
   const total=st.wins+st.be+st.losses;
   const wPct=total>0?Math.round(st.wins/total*100):0;
   const bePct=total>0?Math.round(st.be/total*100):0;
   const lPct=total>0?Math.round(st.losses/total*100):0;
-  const html=`
-    <div style="font-family:Arial,monospace;font-size:8px;letter-spacing:.14em;text-transform:uppercase;color:var(--amber);margin-bottom:14px;display:flex;align-items:center;gap:6px;">
+  // v=6 : ce que les chiffres ne comptent pas, dit en clair sous le total.
+  const mentions=[];
+  if(st.sansR)mentions.push(`${st.sansR} trade${st.sansR>1?'s':''} clos sans R saisi · à compléter dans le Journal`);
+  if(st.nbTest)mentions.push(`${st.nbTest} trade${st.nbTest>1?'s':''} de test non compté${st.nbTest>1?'s':''}`);
+  // v=6 (constats 2, 4, 5, 11) : ligne P&L. Non saisi → « P&L non saisi » (jamais
+  // « $0 ») ; un montant par devise ; « sur X des Y trades clos » s'il en manque ;
+  // signe et couleur pris sur CHAQUE valeur affichée (avant : sur le total R, d'où
+  // « +-1.50% » en vert).
+  let pnl;
+  if(!st.nbPnl)pnl=`<span style="color:var(--text3)">P&amp;L non saisi</span>`;
+  else{
+    const signe=v=>v>0?'+':(v<0?'-':''),classe=v=>v>0?'pos':(v<0?'neg':'');
+    const p=st.pnlPct===null?null:+st.pnlPct.toFixed(2);
+    const pct=p===null?`<span style="color:var(--text3)" title="% indisponible : solde des comptes nul, devise inconnue ou devises différentes">— %</span>`
+      :`<span class="${classe(p)}">${signe(p)}${Math.abs(p).toFixed(2)}%</span>`;
+    const devises=Object.keys(st.pnlParDevise);
+    const montants=devises.map(d=>{const v=Math.round(st.pnlParDevise[d]*100)/100;return `<span class="${classe(v)}">${esc(fmtMontant(v,d))}</span>`;}).join(' &nbsp;·&nbsp; ');
+    const multi=devises.length>1?` <span style="color:var(--text3)">(devises différentes, non additionnées)</span>`:'';
+    const partiel=st.nbPnl<st.closed?` <span style="color:var(--text3)">· sur ${st.nbPnl} des ${st.closed} trades clos</span>`:'';
+    pnl=`${pct} &nbsp;·&nbsp; ${montants}${multi}${partiel}`;
+  }
+  const notes=mentions.length?`<div class="stats-notes" style="font-family:Arial,monospace;font-size:9px;color:var(--text3);line-height:1.5;margin:-6px 0 14px">${mentions.map(m=>`<div>▪ ${m}</div>`).join('')}</div>`:'';
+  // v=6 (constat 12) : les chiffres couvrent TOUS les traders et comptes de l'espace
+  // (aucun filtre au tableau de bord) ; avant, seul le nom de la période était dit.
+  const perimetre=[`Tous les traders de l'espace`];
+  if(st.nbTraders)perimetre.push(`${st.nbTraders} trader${st.nbTraders>1?'s':''}`);
+  if(st.nbComptes)perimetre.push(`${st.nbComptes} compte${st.nbComptes>1?'s':''}`);
+  const entete=`
+    <div style="font-family:Arial,monospace;font-size:8px;letter-spacing:.14em;text-transform:uppercase;color:var(--amber);margin-bottom:4px;display:flex;align-items:center;gap:6px;">
       <span style="width:2px;height:10px;background:var(--amber);display:inline-block;border-radius:1px"></span>
-      ${label}
+      ${esc(label)}
     </div>
+    <div class="stats-perimetre" style="font-family:Arial,monospace;font-size:9px;color:var(--text3);margin-bottom:14px;padding-left:8px">${perimetre.join(' · ')}</div>`;
+  // v=6 (constat 6) : période sans trade clos → une phrase, pas une rangée de zéros
+  // (avant : « +0.00 R » en vert, « 0 % » avec l'aiguille dans le rouge, « WIN 0% »).
+  if(!st.closed){
+    document.getElementById('stats-row').innerHTML=`${entete}
+    <div class="stats-vide" style="font-family:Arial,monospace;font-size:12px;color:var(--text2);background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:14px;line-height:1.5">Aucun trade clos sur ${esc(periode||label)}${st.ouverts?` · ${st.ouverts} trade${st.ouverts>1?'s':''} en cours`:''}</div>
+    ${notes}`;
+    return;
+  }
+  const html=`${entete}
 
     <div style="margin-bottom:16px;">
-      <div class="stat-rr ${rc}" style="font-size:2.6rem;line-height:1">${sign}${st.totalRR.toFixed(2)}<span style="font-size:13px;font-weight:400;color:var(--text3);margin-left:4px">R</span></div>
-      <div class="stat-sub ${rc}" style="font-size:11px;margin-top:4px">${sign}${st.pnlPct.toFixed(2)}% &nbsp;·&nbsp; ${st.totalPnL>=0?'$':'-$'}${Math.abs(st.totalPnL).toLocaleString('fr-FR',{minimumFractionDigits:0,maximumFractionDigits:0})}</div>
+      ${total?`<div class="stat-rr ${rc}" style="font-size:2.6rem;line-height:1">${sign}${totAff.toFixed(2)}<span style="font-size:13px;font-weight:400;color:var(--text3);margin-left:4px">R</span></div>`
+      :`<div class="stat-rr" style="font-size:2.6rem;line-height:1;color:var(--text3)">—<span style="font-size:13px;font-weight:400;color:var(--text3);margin-left:4px">R</span></div>`}
+      <div class="stat-sub" style="font-size:11px;margin-top:4px;line-height:1.5">${pnl}</div>
     </div>
+    ${notes}
 
     <div class="stats-tiles-3">
       <div style="background:rgba(0,168,107,.08);border:1px solid var(--green2);border-radius:var(--radius);padding:10px 6px;text-align:center;">
@@ -1103,8 +1533,8 @@ function renderStatsPanel(st, label){
     <div class="stats-rr-row" style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;">
       <div>
         <div style="font-family:Arial,monospace;font-size:8px;letter-spacing:.1em;color:var(--text3);margin-bottom:3px">TRADE WIN %</div>
-        <div style="font-family:Arial,monospace;font-size:26px;font-weight:700;color:var(--text)">${Math.round(st.winRate)}<span style="font-size:14px;font-weight:400">%</span></div>
-        <div style="font-family:Arial,monospace;font-size:9px;color:var(--text3);margin-top:2px">${total} trade${total>1?'s':''} fermé${total>1?'s':''}</div>
+        <div style="font-family:Arial,monospace;font-size:26px;font-weight:700;color:var(--text)">${st.winRate===null?'—':`${Math.round(st.winRate)}<span style="font-size:14px;font-weight:400">%</span>`}</div>
+        <div style="font-family:Arial,monospace;font-size:9px;color:var(--text3);margin-top:2px">${total} trade${total>1?'s':''} fermé${total>1?'s':''}${st.sansR?' avec R':''}</div>
       </div>
       <div class="stats-speedo">${speedometerHTML(st.winRate,'')}</div>
     </div>
@@ -1113,17 +1543,17 @@ function renderStatsPanel(st, label){
     <div class="stats-tiles-2">
       <div style="background:rgba(0,168,107,.08);border:1px solid var(--green2);border-radius:var(--radius);padding:10px 12px;text-align:center;">
         <div style="font-family:Arial,monospace;font-size:8px;letter-spacing:.1em;color:var(--green);margin-bottom:3px">RR MOY. GAGNÉ</div>
-        <div style="font-family:Arial,monospace;font-size:20px;font-weight:700;color:var(--green)">${st.wins>0?'+'+st.avgWinRR.toFixed(2):'—'}<span style="font-size:11px;font-weight:400;color:var(--text3);margin-left:3px">${st.wins>0?'R':''}</span></div>
+        <div style="font-family:Arial,monospace;font-size:20px;font-weight:700;color:var(--green)">${st.wins>0?(r2(st.avgWinRR)>0?'+':'')+r2(st.avgWinRR).toFixed(2):'—'}<span style="font-size:11px;font-weight:400;color:var(--text3);margin-left:3px">${st.wins>0?'R':''}</span></div>
         <div style="font-family:Arial,monospace;font-size:8px;color:var(--text3);margin-top:2px">sur ${st.wins} trade${st.wins>1?'s':''}</div>
       </div>
       <div style="background:rgba(204,42,66,.08);border:1px solid var(--red2);border-radius:var(--radius);padding:10px 12px;text-align:center;">
         <div style="font-family:Arial,monospace;font-size:8px;letter-spacing:.1em;color:var(--red);margin-bottom:3px">RR MOY. PERDU</div>
-        <div style="font-family:Arial,monospace;font-size:20px;font-weight:700;color:var(--red)">${st.losses>0?st.avgLossRR.toFixed(2):'—'}<span style="font-size:11px;font-weight:400;color:var(--text3);margin-left:3px">${st.losses>0?'R':''}</span></div>
+        <div style="font-family:Arial,monospace;font-size:20px;font-weight:700;color:var(--red)">${st.losses>0?r2(st.avgLossRR).toFixed(2):'—'}<span style="font-size:11px;font-weight:400;color:var(--text3);margin-left:3px">${st.losses>0?'R':''}</span></div>
         <div style="font-family:Arial,monospace;font-size:8px;color:var(--text3);margin-top:2px">sur ${st.losses} trade${st.losses>1?'s':''}</div>
       </div>
     </div>
 
-    <div style="margin-bottom:16px;">
+    ${total?`<div style="margin-bottom:16px;">
       <div style="display:flex;justify-content:space-between;font-family:Arial,monospace;font-size:8px;color:var(--text3);margin-bottom:5px;letter-spacing:.06em;">
         <span style="color:var(--green)">▪ WIN ${wPct}%</span>
         <span style="color:var(--yellow)">▪ BE ${bePct}%</span>
@@ -1134,36 +1564,41 @@ function renderStatsPanel(st, label){
         ${bePct>0?`<div style="flex:${bePct};background:var(--yellow);transition:flex .4s ease"></div>`:''}
         ${lPct>0?`<div style="flex:${lPct};background:var(--red);transition:flex .4s ease"></div>`:''}
       </div>
-    </div>
+    </div>`:''}
 
-    <div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:10px 14px;display:flex;align-items:center;justify-content:space-between;">
-      <div style="font-family:Arial,monospace;font-size:8px;letter-spacing:.1em;color:var(--text3)">DURÉE MOY. / TRADE</div>
-      <div id="avg-duration-lbl" style="font-family:Arial,monospace;font-size:13px;font-weight:700;color:var(--amber)">—</div>
-    </div>
   `;
   document.getElementById('stats-row').innerHTML=html;
 }
 
-function calcAvgDuration(trades){
-  const el=document.getElementById('avg-duration-lbl');if(!el)return;
-  if(!trades||!trades.length){el.textContent='—';return;}
-  // Pas de durée réelle en base - on affiche total trades
-  el.textContent=trades.length+' trades';
+// v=6 (FND-10) : la tuile « DURÉE MOY. / TRADE » est retirée — elle affichait un
+// NOMBRE de trades. Aucune durée n'existe en base (close_date jamais saisie, et
+// sans heure) ; une vraie durée demanderait de saisir l'heure d'entrée et de sortie.
+
+// v=6 (données honnêtes) : un point = un trade, étiqueté par son jour (jj/mm, avec
+// /aa si la période couvre plusieurs années). Avant : « oct. 26 » répété, qui se
+// lisait comme un total du mois.
+function joursDesTrades(trades){
+  const ans=new Set(trades.map(t=>dateDuTrade(t).getFullYear())).size>1;
+  return trades.map(t=>{const d=dateDuTrade(t);return String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0')+(ans?'/'+String(d.getFullYear()).slice(2):'');});
 }
 
 function buildCumRRData(trades){
   // V9.1 FIX : on inclut les trades BE (0R) — ils apparaissent comme palier plat sur la courbe.
   // Avant : .filter(...&&(+t.actual_rr||0)!==0) → trades BE invisibles.
+  // v=6 : seulement les trades comptés (ni annulés ni de test), clos AVEC un R saisi :
+  // un R non saisi n'est pas un BE, il n'est pas tracé (le panneau le signale). Cumul
+  // exact, arrondi seulement pour l'affichage (avant : chaque trade arrondi puis
+  // additionné, la fin de courbe s'écartait du total du panneau).
+  trades=tradesComptes(trades);
   const sorted=trades.filter(t=>t.status==='closed')
-    .sort((a,b)=>new Date(a.trade_date||a.created_at)-new Date(b.trade_date||b.created_at));
-  const labels=['Début'];const data=[0];
+    .filter(aResultat).sort(ordreChrono);
+  const labels=['Début',...joursDesTrades(sorted)];const data=[0];
   let cum=0;
   sorted.forEach(t=>{
-    cum+=+(+t.actual_rr||0).toFixed(2);
-    labels.push(fDateShort(t.trade_date||t.created_at));
+    cum+=+t.actual_rr;
     data.push(+cum.toFixed(2));
   });
-  return{labels,data};
+  return{labels,data,trades:sorted};
 }
 
 function buildSegmentColors(data){
@@ -1212,14 +1647,10 @@ function loadRichEditor(htmlContent){
   initRichEditor();
 }
 
-// V9.6 — Fuseau choisi par l'utilisateur (persisté en localStorage si possible).
-// Les codes correspondent à la nomenclature interne d'Investing.com :
-//   55  = London GMT (auto bascule heure d'été en mars)
-//   113 = Paris/Berlin (CET/CEST)
-//   8   = Argentine GMT-3 (ancien défaut, à éviter)
-//   12  = London (variante)
-//   4   = Pacifique (US West Coast)
-// Si le mapping change côté Investing.com, l'utilisateur change visuellement dans le sélecteur.
+// V9.6 — Code de fuseau demandé au widget Investing.com (paramètre timeZone), persisté
+// en localStorage si possible. v=6 (#34) : la correspondance code → fuseau n'est PAS
+// vérifiée (notes d'origine, contradictoires : 55 = Londres ? 113 = Paris/Berlin ?
+// 8 = Argentine ou « défaut Investing » ?) : l'aide de conversion ne la suppose jamais.
 let S_calTz = (function(){
   try { return localStorage.getItem('S_calTz') || '55'; } catch(_) { return '55'; }
 })();
@@ -1227,30 +1658,33 @@ function onCalTzChange(val){
   S_calTz = val || '55';
   try { localStorage.setItem('S_calTz', S_calTz); } catch(_) {}
   updateCalIframe();
+  renderCalConversion(); // v=6 (#34) : l'aide suit le code tout de suite (pas au tour suivant de l'horloge)
 }
 
 // V9.5/9.6 — URL du widget calendrier Investing.com
 //  - timeFilter au lieu de calType (calType était ignoré → bugs période)
 //  - timeFilter=customDate avec dateFrom/dateTo pour les plages semaine
-//  - timeZone provient de S_calTz (sélecteur UI, défaut Londres)
+//  - timeZone provient de S_calTz (sélecteur, défaut 55 ; fuseau réel non vérifié)
+// v=6 (#35) : jours (à midi, heure locale) de la période affichée, partagés par l'URL du
+// widget et l'aide de conversion : l'écart d'heure doit être celui de CES jours.
+function joursPeriodeCal(kind) {
+  const now = new Date();
+  if (kind === 'today') return [new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12)];
+  const dow = now.getDay();
+  const mondayOffset = (dow === 0 ? -6 : 1 - dow);
+  const lundi = now.getDate() + mondayOffset + (kind === 'nextWeek' ? 7 : 0);
+  return Array.from({length:7}, (_, i) => new Date(now.getFullYear(), now.getMonth(), lundi + i, 12));
+}
+
 function buildCalIframeSrc() {
   const zone   = CAL_ZONES.find(z => z.code === S_calZone)   || CAL_ZONES[0];
   const period = CAL_PERIODS.find(p => p.key === S_calPeriod) || CAL_PERIODS[1];
   const countries = zone.inv;
-
-  const pad = n => String(n).padStart(2,'0');
-  const ymd = d => d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());
-  const now = new Date();
-  const dow = now.getDay();
-  const mondayOffset = (dow === 0 ? -6 : 1 - dow);
-  const thisMonday = new Date(now); thisMonday.setDate(now.getDate() + mondayOffset);
-  const thisSunday = new Date(thisMonday); thisSunday.setDate(thisMonday.getDate() + 6);
-  const nextMonday = new Date(thisMonday); nextMonday.setDate(thisMonday.getDate() + 7);
-  const nextSunday = new Date(nextMonday); nextSunday.setDate(nextMonday.getDate() + 6);
+  const jours = joursPeriodeCal(period.kind);
 
   const params = [
     'columns=exc_flags,exc_currency,exc_importance,exc_actual,exc_forecast,exc_previous',
-    'importance=2,3',
+    'importance=' + CAL_IMPORTANCE.join(','),
     `countries=${countries}`,
     `timeZone=${S_calTz}`,
     'lang=5',
@@ -1258,14 +1692,10 @@ function buildCalIframeSrc() {
 
   if (period.kind === 'today') {
     params.push('timeFilter=timeRemain');
-  } else if (period.kind === 'thisWeek') {
+  } else { // thisWeek / nextWeek : du lundi au dimanche
     params.push('timeFilter=customDate');
-    params.push('dateFrom=' + ymd(thisMonday));
-    params.push('dateTo='   + ymd(thisSunday));
-  } else if (period.kind === 'nextWeek') {
-    params.push('timeFilter=customDate');
-    params.push('dateFrom=' + ymd(nextMonday));
-    params.push('dateTo='   + ymd(nextSunday));
+    params.push('dateFrom=' + fmtYMD(jours[0]));
+    params.push('dateTo='   + fmtYMD(jours[6]));
   }
   return `https://sslecal2.investing.com?${params.join('&')}`;
 }
@@ -1285,18 +1715,11 @@ function buildCalBars() {
 
       if (z.code === 'ALL') {
         btn.innerHTML = `<span style="font-size:11px;font-weight:700;letter-spacing:.04em">ALL</span>`;
-      } else if (z.code === 'XAU') {
-        btn.innerHTML = `<span style="font-size:12px;margin-right:3px">🥇</span><span style="font-size:11px;font-weight:700">XAU</span>`;
       } else {
         btn.innerHTML = `<img src="https://flagcdn.com/20x15/${z.cc}.png" style="border-radius:1px;vertical-align:middle;margin-right:4px;width:18px;height:14px" alt="${z.code}"><span style="font-size:11px;font-weight:700">${z.label}</span>`;
       }
       btn.style.cssText = 'display:flex;align-items:center;gap:4px;padding:5px 11px;cursor:pointer;';
-      btn.addEventListener('click', () => {
-        S_calZone = z.code;
-        document.querySelectorAll('#cal-zone-btns .acc-tab').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        updateCalIframe();
-      });
+      btn.addEventListener('click', () => choisirZoneCal(z.code));
       zoneEl.appendChild(btn);
     });
   }
@@ -1311,15 +1734,33 @@ function buildCalBars() {
       btn.textContent = p.label;
       btn.dataset.period = p.key;
       btn.style.cssText = 'font-size:10px;padding:4px 12px;cursor:pointer;';
-      btn.addEventListener('click', () => {
-        S_calPeriod = p.key;
-        document.querySelectorAll('#cal-period-btns .acc-tab').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        updateCalIframe();
-      });
+      btn.addEventListener('click', () => choisirPeriodeCal(p.key));
       periodEl.appendChild(btn);
     });
   }
+}
+
+// v=6 (#37) : clic sur une zone, extrait de buildCalBars pour que la note de zone suive (et soit testable).
+function choisirZoneCal(code) {
+  S_calZone = code;
+  document.querySelectorAll('#cal-zone-btns .acc-tab').forEach(b => b.classList.toggle('active', b.dataset.zone === code));
+  updateCalIframe();
+  renderCalZoneNote();
+}
+// v=6 (#37) : une zone dont la liste de pays n'est pas vérifiée le dit (ex. EUR).
+function renderCalZoneNote() {
+  const el = document.getElementById('cal-zone-note');
+  if (!el) return;
+  const z = CAL_ZONES.find(x => x.code === S_calZone);
+  el.textContent = z && z.note ? z.label + ' : ' + z.inv.split(',').length + ' codes pays demandés à Investing.com — ' + z.note + '.' : '';
+}
+
+// v=6 (#35) : choisir une période recalcule aussi l'aide (l'écart dépend des jours affichés).
+function choisirPeriodeCal(key) {
+  S_calPeriod = key;
+  document.querySelectorAll('#cal-period-btns .acc-tab').forEach(b => b.classList.toggle('active', b.dataset.period === key));
+  updateCalIframe();
+  renderCalConversion(); // v=6 (#35) : l'écart dépend des jours affichés
 }
 
 function updateCalIframe() {
@@ -1343,8 +1784,17 @@ function updateCalIframe() {
 
 function loadCalendar(forceRefresh = false) {
   buildCalBars();
+  renderCalZoneNote();
+  const imp = document.getElementById('cal-importance');
+  if (imp) imp.textContent = libelleImportanceCal();
   // V9.6 — synchroniser visuellement le sélecteur de fuseau avec S_calTz
   const tzSel = document.getElementById('cal-tz-pick');
+  // v=6 (#34) : un ancien code enregistré absent de la liste y est ajouté (sinon menu vide
+  // alors que ce code est bien demandé au widget).
+  if (tzSel && ![...(tzSel.options || [])].some(o => o.value === S_calTz)) {
+    const o = document.createElement('option'); o.value = S_calTz; o.textContent = S_calTz;
+    tzSel.appendChild(o);
+  }
   if (tzSel) tzSel.value = S_calTz;
   // V9.8 — démarrer l'horloge live + remplir le convertisseur
   startCalClock();
@@ -1366,47 +1816,75 @@ function startCalClock(){
       const offsetMin = -now.getTimezoneOffset(); // ex: Paris été = +120
       const sign = offsetMin>=0?'+':'-';
       const oh = Math.floor(Math.abs(offsetMin)/60);
+      const om = Math.abs(offsetMin)%60; // v=6 (#45) : fuseaux à la demi-heure (Inde, Terre-Neuve…)
       const tzName = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
-      tz.textContent = `GMT${sign}${oh} · ${tzName.split('/').pop()||''}`;
+      tz.textContent = `GMT${sign}${oh}${om?':'+String(om).padStart(2,'0'):''} · ${tzName.split('/').pop()||''}`;
     }
-    // Maj du guide de conversion : on suppose que l'iframe est en NY (GMT-4 ou -5 hiver).
-    // Si Sylas/Killian ont trouvé un autre code qui marche, on l'affichera.
-    const conv = computeConversionHint(now);
-    const refEl = document.getElementById('cal-conv-ref');
-    const zoneEl = document.getElementById('cal-conv-zone');
-    const ruleEl = document.getElementById('cal-conv-rule');
-    if (refEl)  refEl.textContent = conv.refTime;
-    if (zoneEl) zoneEl.textContent = conv.zoneLabel;
-    if (ruleEl) ruleEl.textContent = conv.rule;
+    renderCalConversion();
   };
   renderClock();
   _calClockTimer = setInterval(renderClock, 30000); // refresh toutes les 30s
 }
 
-function computeConversionHint(now){
-  // Heure NY = heure locale - offset Paris + offset NY
-  // Calcul simplifié via toLocaleString avec timezone explicite.
-  const fmtNY = new Intl.DateTimeFormat('fr-FR',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',hour12:false});
-  const fmtLondon = new Intl.DateTimeFormat('fr-FR',{timeZone:'Europe/London',hour:'2-digit',minute:'2-digit',hour12:false});
-  const fmtUTC = new Intl.DateTimeFormat('fr-FR',{timeZone:'Etc/UTC',hour:'2-digit',minute:'2-digit',hour12:false});
-  // On affiche : « Si iframe = [heure NY] → c'est NY, ajoute X h pour ton fuseau »
-  // Calcul du delta NY → utilisateur
-  const localMin = now.getHours()*60 + now.getMinutes();
-  const nyParts = fmtNY.format(now).match(/(\d+):(\d+)/);
-  const nyMin = (+nyParts[1])*60 + (+nyParts[2]);
-  let deltaH = Math.round((localMin - nyMin)/60);
-  if (deltaH < -12) deltaH += 24;
-  if (deltaH > 12)  deltaH -= 24;
+// v=6 (#34) : écart (en minutes) entre l'heure locale et le fuseau IANA `zone` à l'instant d.
+function ecartFuseauMin(d, zone){
+  const p = {};
+  new Intl.DateTimeFormat('en-US',{timeZone:zone,hourCycle:'h23',year:'numeric',month:'numeric',day:'numeric',hour:'numeric',minute:'numeric'})
+    .formatToParts(d).forEach(x => { p[x.type] = +x.value; });
+  const decalageZone = (Date.UTC(p.year,p.month-1,p.day,p.hour,p.minute) - Math.floor(d.getTime()/60000)*60000) / 60000;
+  return -d.getTimezoneOffset() - decalageZone;
+}
+// v=6 (#45) : l'écart garde ses minutes (« +9 h 30 »), jamais arrondi à l'heure.
+function fmtEcart(min){
+  if (!min) return 'même heure';
+  const a = Math.abs(min);
+  return (min>0?'+':'-') + Math.floor(a/60) + ' h' + (a%60 ? ' ' + String(a%60).padStart(2,'0') : '');
+}
+// v=6 (#35) : écart calculé jour par jour sur la période affichée ; s'il change (l'Europe et
+// les États-Unis changent d'heure à des dates différentes), le dire : « +6 h jusqu'au 24/10, puis +5 h ».
+function regleEcart(zone, jours){
+  const segs = [];
+  jours.forEach(j => {
+    const e = ecartFuseauMin(j, zone), s = segs[segs.length-1];
+    if (s && s.e === e) s.fin = j; else segs.push({e, debut:j, fin:j});
+  });
+  const jj = d => String(d.getDate()).padStart(2,'0') + '/' + String(d.getMonth()+1).padStart(2,'0');
+  return segs.map((s, i) => i === 0
+    ? fmtEcart(s.e) + (segs.length > 1 ? ' jusqu\'au ' + jj(s.fin) : '')
+    : (i === segs.length-1 ? 'puis ' + fmtEcart(s.e) : fmtEcart(s.e) + ' du ' + jj(s.debut) + ' au ' + jj(s.fin))
+  ).join(', ');
+}
+// v=6 (#34) : le fuseau des heures du widget n'est pas connu (code non vérifié) : l'aide le
+// dit et donne l'écart exact entre ton heure et les deux fuseaux possibles d'après les notes
+// du code (New York, ou Londres pour le code 55 par défaut). Jamais « c'est New York ».
+function computeConversionHint(jours){
   return {
-    refTime: fmtNY.format(now),
-    zoneLabel: 'New York (heure par défaut Investing.com)',
-    rule: `ajoute ${deltaH>=0?'+':''}${deltaH}h pour avoir ton heure locale`
+    statut: 'fuseau du code ' + S_calTz + ' non vérifié',
+    ny: regleEcart('America/New_York', jours),
+    londres: regleEcart('Europe/London', jours),
   };
+}
+function renderCalConversion(){
+  const period = CAL_PERIODS.find(p => p.key === S_calPeriod) || CAL_PERIODS[1];
+  const conv = computeConversionHint(joursPeriodeCal(period.kind));
+  const st = document.getElementById('cal-conv-statut');
+  const ny = document.getElementById('cal-conv-ny');
+  const lon = document.getElementById('cal-conv-lon');
+  if (st)  st.textContent = conv.statut;
+  if (ny)  ny.textContent = conv.ny;
+  if (lon) lon.textContent = conv.londres;
 }
 
 
+// v=6 (données honnêtes) : un R affiché arrondi à 2 décimales, sans « -0.00 ».
+function texteR(v){const n=+(+v).toFixed(2);return (n>0?'+':'')+n.toFixed(2)+' R';}
+// v=6 : graduation d'un axe en R sans arrondi qui la fausse (avant : toFixed(1) →
+// « +0.1R » répété, 0.25 posé sur la ligne « +0.3R », « -0.0R »).
+function graduationR(v){const n=+(+v).toFixed(4);return (n>0?'+':'')+n+'R';}
+
 // V8 : helpers de construction de charts V7 (segments colorés par profit/perte)
-function makeBalChart(canvas,labels,data){
+// v=6 : trades = les trades tracés (point i = trades[i-1], le point 0 est « Début »).
+function makeBalChart(canvas,labels,data,trades){
   if(S.chartBal)S.chartBal.destroy();
   const gc=getCSSVar('--chart-grid');const tc=getCSSVar('--chart-tick');
   const amber=getCSSVar('--amber');
@@ -1428,10 +1906,12 @@ function makeBalChart(canvas,labels,data){
   S.chartBal=new Chart(canvas,{type:'line',data:{
     labels,
     datasets:[{
-      label:'R:R cumulé',data,
+      label:'R cumulé',data,
       segment:buildSegmentColors(data),
       fill:true,backgroundColor:grad,
-      tension:.4,pointRadius:0,pointHoverRadius:5,
+      // v=6 : tension 0. Le lissage (0.4) inventait des creux et des pics absents des
+      // données (un BE dessiné en creux, la courbe sous 0 sans aucune perte).
+      tension:0,pointRadius:0,pointHoverRadius:5,
       pointHoverBackgroundColor:amber,borderWidth:2
     }]
   },options:{
@@ -1442,14 +1922,20 @@ function makeBalChart(canvas,labels,data){
       tooltip:{
         backgroundColor:getCSSVar('--chart-tt'),borderColor:amber,borderWidth:1,
         titleColor:amber,bodyColor:getCSSVar('--text'),
-        callbacks:{label:ctx=>(ctx.parsed.y>=0?'+':'')+ctx.parsed.y.toFixed(2)+' R'}
+        // v=6 : un point = un trade, et la valeur est un CUMUL (avant : le mois en titre
+        // et « +2.00 R », lu comme le résultat du mois).
+        callbacks:{
+          title:items=>{const t=(trades||[])[items[0].dataIndex-1];return t?`${t.instrument||'?'} · ${dateTradeTexte(t)}`:'Début';},
+          label:c=>'Cumulé : '+texteR(c.parsed.y),
+          afterLabel:c=>{const t=(trades||[])[c.dataIndex-1];return t?'Ce trade : '+texteR(t.actual_rr):'';}
+        }
       }
     },
     scales:{
       x:{grid:{color:gc,drawBorder:false},ticks:{color:tc,font:{size:9,family:'Arial'},maxTicksLimit:10}},
       y:{
         grid:{color:gc,drawBorder:false},
-        ticks:{color:tc,font:{size:9,family:'Arial'},callback:v=>(v>=0?'+':'')+v.toFixed(1)+'R'},
+        ticks:{color:tc,font:{size:9,family:'Arial'},callback:graduationR},
         // Ligne zéro bien visible
         afterDataLimits(axis){axis.min=Math.min(axis.min,-0.1);}
       }
@@ -1460,31 +1946,29 @@ function makeBalChart(canvas,labels,data){
 // V9.1 : 1 barre par trade fermé, filtrée par la période (mois sélectionnés ou tout)
 function buildTradesForRRChart(keys){
   // keys = liste de "YYYY-M" ; si vide/null → tous les trades
-  return S.trades
-    .filter(t=>t.status==='closed')
-    .filter(t=>{
-      if(!keys||!keys.length)return true;
-      const d=new Date(t.trade_date||t.created_at);
-      return keys.includes(d.getFullYear()+'-'+d.getMonth());
-    })
-    .sort((a,b)=>new Date(a.trade_date||a.created_at)-new Date(b.trade_date||b.created_at));
+  // v=6 : MÊME liste que la courbe (buildCumRRData : comptés, clos, R saisi, ordre
+  // chronologique) et même période que le panneau (getTradesForMonths). Avant : les
+  // trades de test et les clos sans R y passaient (un « R non saisi » dessiné en BE).
+  return buildCumRRData(keys&&keys.length?getTradesForMonths(keys):S.trades).trades;
 }
 
-function makeRRChart(keys){
+// v=6 : trades = la liste déjà tracée par la courbe (buildCumRRData(...).trades).
+function makeRRChart(trades){
   if(S.chartRR)S.chartRR.destroy();
   const gc=getCSSVar('--chart-grid');const tc=getCSSVar('--chart-tick');const amber=getCSSVar('--amber');
-  const trades=buildTradesForRRChart(keys);
   // Stocker pour le clic (mapping index → trade id)
   S._rrChartTrades=trades;
-  const labels=trades.map(t=>{
-    const d=new Date(t.trade_date||t.created_at);
-    return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')} ${t.instrument||''}`;
-  });
-  const data=trades.map(t=>+(+t.actual_rr||0).toFixed(2));
+  const jours=joursDesTrades(trades);
+  const labels=trades.map((t,i)=>`${jours[i]} ${t.instrument||''}`);
+  // v=6 : valeur saisie exacte (aResultat garanti) ; l'arrondi n'est que dans l'info-bulle.
+  const data=trades.map(t=>+t.actual_rr);
   S.chartRR=new Chart(document.getElementById('rrChart'),{type:'bar',data:{
     labels,
-    datasets:[{label:'R:R',data,
+    datasets:[{label:'R réalisé',data,
       backgroundColor:data.map(v=>v>0?'rgba(0,214,143,.8)':(v<0?'rgba(255,77,106,.8)':'rgba(240,192,64,.7)')),
+      // v=6 : un BE (0 R) garde une barre visible et cliquable (avant : 0 px, ni
+      // info-bulle ni détail ; son jaune ne se voyait jamais).
+      minBarLength:4,
       borderRadius:2,hoverBackgroundColor:amber}]
   },options:{
     responsive:true,maintainAspectRatio:false,
@@ -1497,9 +1981,9 @@ function makeRRChart(keys){
           title:items=>{
             const t=S._rrChartTrades?.[items[0].dataIndex];
             if(!t)return items[0].label;
-            return `${t.instrument||'?'} · ${fDate(t.trade_date||t.created_at)}`;
+            return `${t.instrument||'?'} · ${dateTradeTexte(t)}`;
           },
-          label:c=>(c.parsed.y>=0?'+':'')+c.parsed.y.toFixed(2)+' R'
+          label:c=>texteR(c.parsed.y)+(c.parsed.y===0?' (BE)':'')
         }
       }
     },
@@ -1510,9 +1994,26 @@ function makeRRChart(keys){
     },
     scales:{
       x:{grid:{color:gc,drawBorder:false},ticks:{color:tc,font:{size:9,family:'Arial'},maxRotation:60,minRotation:45,autoSkip:true,maxTicksLimit:30}},
-      y:{grid:{color:gc,drawBorder:false},ticks:{color:tc,font:{size:9,family:'Arial'},callback:v=>v+'R'}}
+      y:{grid:{color:gc,drawBorder:false},ticks:{color:tc,font:{size:9,family:'Arial'},callback:graduationR}}
     }
   }});
+}
+
+// v=6 (données honnêtes) : rien à tracer → une phrase dans le cadre, pas un axe vide
+// autour de 0 (qui se lit « résultat nul »). Le canvas est seulement masqué, jamais
+// remplacé : le dessin suivant le réutilise.
+function grapheVide(idCadre,idCanvas,vide){
+  const cadre=document.getElementById(idCadre),canvas=document.getElementById(idCanvas);
+  if(!cadre||!canvas)return;
+  let msg=cadre.querySelector('.chart-vide');
+  if(vide&&!msg){
+    msg=document.createElement('div');msg.className='empty chart-vide';
+    msg.style.cssText='position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:16px;font-size:12px';
+    msg.textContent='Aucun trade clos avec un R saisi sur la période';
+    cadre.appendChild(msg);
+  }
+  if(msg)msg.style.display=vide?'flex':'none';
+  canvas.style.display=vide?'none':'';
 }
 
 // v=5 : redessine les deux graphiques du tableau de bord selon le filtre COURANT
@@ -1522,27 +2023,18 @@ function redessinerGraphiques(){
 }
 
 async function renderCharts(){
-  if(!grapheDisponible(redessinerGraphiques))return;
-  // Vue ALL TIME (aucun mois sélectionné)
-  const trades=S.trades.filter(t=>t.status!=='cancelled');
-  const{labels,data}=buildCumRRData(trades);
-  const canvas=document.getElementById('balChart');
-  makeBalChart(canvas,labels,data);
-  makeRRChart(null); // null = tous les trades
+  // Vue ALL TIME (aucun mois sélectionné) : même dessin, sans filtre de mois.
+  return renderChartsByMonths(null);
 }
 
-function buildMonthlyRR(){
-  // Conservé pour compatibilité éventuelle (renderMonthly utilise sa propre logique)
-  const map={};
-  S.trades.filter(t=>t.status==='closed').forEach(t=>{const d=new Date(t.trade_date||t.created_at);const k=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;map[k]=(map[k]||0)+(+t.actual_rr||0);});
-  return Object.entries(map).sort().slice(-12).map(([k,rr])=>({lbl:k.replace('-','/').replace(/^20/,''),rr:+rr.toFixed(2)}));
-}
+// v=6 : buildMonthlyRR retirée — son seul appelant (updateChartColors) l'appliquait,
+// à tort, à un graphique d'une barre par trade.
 
 function renderMonthly(){
   const tb=document.getElementById('m-tbody');
   if(!tb)return; // FND-004 : garde — l'element cible n'existe pas dans le DOM actuel
   const years={};
-  S.trades.filter(t=>t.status==='closed').forEach(t=>{const d=new Date(t.trade_date||t.created_at);const y=d.getFullYear(),m=d.getMonth();if(!years[y])years[y]=Array(12).fill(null).map(()=>({rr:0,pnl:0,tot:0,wins:0}));years[y][m].rr+=(+t.actual_rr||0);years[y][m].pnl+=(+t.pnl_amount||0);years[y][m].tot++;if((+t.actual_rr||0)>0)years[y][m].wins++;});
+  S.trades.filter(t=>t.status==='closed').forEach(t=>{const d=dateDuTrade(t);const y=d.getFullYear(),m=d.getMonth();if(!years[y])years[y]=Array(12).fill(null).map(()=>({rr:0,pnl:0,tot:0,wins:0}));years[y][m].rr+=(+t.actual_rr||0);years[y][m].pnl+=(+t.pnl_amount||0);years[y][m].tot++;if((+t.actual_rr||0)>0)years[y][m].wins++;});
   let html='';
   Object.entries(years).sort((a,b)=>b[0]-a[0]).forEach(([yr,months])=>{
     const tRR=months.reduce((s,m)=>s+(m?m.rr:0),0),tPnL=months.reduce((s,m)=>s+(m?m.pnl:0),0),tTot=months.reduce((s,m)=>s+(m?m.tot:0),0),tWins=months.reduce((s,m)=>s+(m?m.wins:0),0);
@@ -1566,9 +2058,19 @@ async function showTradeDetailById(tradeId){
   const overlay=document.getElementById('tjp-overlay');
   if(!panel||!content||!title)return;
 
-  const rr=+t.actual_rr||0;
-  const pnl=+t.pnl_amount||0;
-  const col=rr>0?'var(--green)':(rr<0?'var(--red)':'var(--yellow)');
+  // v=6 (constat 0) : clos sans R saisi → « Résultat non saisi », bordure neutre (le
+  // jaune reste au BE saisi) ; un trade en cours n'a pas de résultat chiffré.
+  const res=resultatDuTrade(t),enCours=t.status==='open';
+  const col=res&&!enCours?res.col:'var(--border2)';
+  const resultatHTML=res&&!enCours?`<div style="font-family:Arial,monospace;font-size:22px;font-weight:700;color:${res.col}">${res.texte}</div>`
+    :`<div style="font-family:Arial,monospace;font-size:13px;color:var(--text3);margin-top:4px">${enCours?'Trade en cours':(t.status==='closed'?'Résultat non saisi':'Trade annulé')}</div>`;
+  // v=6 (constat 2) : P&L dans la devise du compte, « P&L non saisi » s'il manque
+  // (avant : masqué, un 0 saisi aussi). Trade en cours : ce qui est saisi est dit tel quel.
+  const pnl=pnlDuTrade(t);
+  const note=txt=>`<div style="font-family:Arial,monospace;font-size:9px;color:var(--text3);margin-top:2px">${txt}</div>`;
+  const pnlHTML=enCours?(res||pnl?note(`Saisi : ${[res&&res.texte,pnl&&esc(pnl.texte)].filter(Boolean).join(' · ')} (trade encore ouvert)`):'')
+    :(pnl?`<div style="font-family:Arial,monospace;font-size:11px;color:${pnl.col};margin-top:2px">${esc(pnl.texte)}</div>`:(t.status==='closed'?note('P&amp;L non saisi'):''))
+      +(t.status==='closed'&&!res?note('À compléter : ✏ Modifier ce trade'):'');
   const dirClass=t.direction==='LONG'?'long':'short';
   const planLabel={respected:'✅ Plan respecté',partial:'⚠ Plan partiel',not_respected:'❌ Plan non respecté'}[t.plan_respected]||'';
   const statusLabel=t.status==='closed'?'✓ FERMÉ':(t.status==='open'?'● EN COURS':'⏸ ANNULÉ');
@@ -1576,16 +2078,20 @@ async function showTradeDetailById(tradeId){
   title.innerHTML=`<span style="display:inline-flex;align-items:center;gap:8px">
     <span style="font-weight:700;font-size:11px;color:var(--text)">${esc(t.instrument||'?')}</span>
     <span class="badge badge-${dirClass}">${t.direction||''}</span>
-    <span style="font-size:9px;color:var(--text3)">${fDate(t.trade_date||t.created_at)}</span>
+    <span style="font-size:9px;color:var(--text3)">${dateTradeHTML(t)}</span>
   </span>`;
 
+  // v=6 (constat 30) : le panneau lit les VRAIES colonnes, comme le journal
+  // (sl_price, tp_price, risk_rr « R:R théo », lessons) et montre aussi notes
+  // d'entrée, session, TF et setup. Avant : stop_loss, take_profit, planned_rr et
+  // lessons_learned, qui n'existent pas : ces saisies n'apparaissaient jamais.
   content.innerHTML=`
     <!-- Bandeau résultat -->
     <div style="background:var(--bg3);border:1px solid var(--border);border-left:3px solid ${col};border-radius:var(--radius);padding:12px 14px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;gap:10px">
       <div>
         <div style="font-family:Arial,monospace;font-size:8px;color:var(--amber);letter-spacing:.1em;margin-bottom:3px">RÉSULTAT</div>
-        <div style="font-family:Arial,monospace;font-size:22px;font-weight:700;color:${col}">${rr>=0?'+':''}${rr.toFixed(2)}R</div>
-        ${pnl!==0?`<div style="font-family:Arial,monospace;font-size:11px;color:${pnl>=0?'var(--green)':'var(--red)'};margin-top:2px">${pnl>=0?'$':'-$'}${Math.abs(pnl).toFixed(2)}</div>`:''}
+        ${resultatHTML}
+        ${pnlHTML}
       </div>
       <div style="text-align:right">
         <div style="font-family:Arial,monospace;font-size:9px;color:var(--text3);letter-spacing:.06em">${statusLabel}</div>
@@ -1594,22 +2100,24 @@ async function showTradeDetailById(tradeId){
     </div>
 
     <!-- ANALYSE -->
-    ${t.analysis_notes?`<div style="margin-bottom:14px">
+    ${(t.analysis_notes||t.session||t.timeframe||t.setup_type)?`<div style="margin-bottom:14px">
       <div style="font-family:Arial,monospace;font-size:8px;color:var(--amber);letter-spacing:.14em;margin-bottom:6px">▪ ANALYSE</div>
-      <div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;font-size:11px;color:var(--text2);line-height:1.7">${sanitizeNotesHtml(t.analysis_notes)}</div>
+      ${(t.session||t.timeframe||t.setup_type)?`<div class="chip-row">${t.session?chip('Session',t.session):''}${t.timeframe?chip('TF',t.timeframe):''}${t.setup_type?chip('Setup',t.setup_type):''}</div>`:''}
+      ${t.analysis_notes?`<div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;font-size:11px;color:var(--text2);line-height:1.7">${sanitizeNotesHtml(t.analysis_notes)}</div>`:''}
     </div>`:''}
 
     <!-- EXÉCUTION (paramètres) -->
     <div style="margin-bottom:14px">
       <div style="font-family:Arial,monospace;font-size:8px;color:var(--amber);letter-spacing:.14em;margin-bottom:6px">▪ EXÉCUTION</div>
       <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:6px">
-        ${t.entry_price?`<div class="chip"><span class="lbl">Entrée: </span><span class="val">${esc(t.entry_price)}</span></div>`:''}
-        ${t.stop_loss?`<div class="chip"><span class="lbl">SL: </span><span class="val">${esc(t.stop_loss)}</span></div>`:''}
-        ${t.take_profit?`<div class="chip"><span class="lbl">TP: </span><span class="val">${esc(t.take_profit)}</span></div>`:''}
-        ${t.exit_price?`<div class="chip"><span class="lbl">Sortie: </span><span class="val">${esc(t.exit_price)}</span></div>`:''}
-        ${t.lot_size?`<div class="chip"><span class="lbl">Lot: </span><span class="val">${esc(t.lot_size)}</span></div>`:''}
-        ${t.planned_rr?`<div class="chip"><span class="lbl">R:R prévu: </span><span class="val">${(+t.planned_rr).toFixed(2)}</span></div>`:''}
+        ${t.entry_price?chip('Entrée',t.entry_price):''}
+        ${t.sl_price?chipC('SL',t.sl_price,'var(--red)'):''}
+        ${t.tp_price?chipC('TP',t.tp_price,'var(--green)'):''}
+        ${t.exit_price?chip('Sortie',t.exit_price):''}
+        ${t.lot_size?chip('Lot',t.lot_size):''}
+        ${t.risk_rr?chipC('R:R théo','+'+parseFloat(t.risk_rr).toFixed(2),'var(--blue)'):''}
       </div>
+      ${t.entry_notes?`<div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;font-size:11px;color:var(--text2);line-height:1.7;margin-top:6px">${texteLignes(t.entry_notes)}</div>`:''}
     </div>
 
     <!-- CAPTURES (chargées async, AGRANDIES) -->
@@ -1619,14 +2127,14 @@ async function showTradeDetailById(tradeId){
     </div>
 
     <!-- GESTION & CLÔTURE -->
-    ${(t.plan_respected||t.execution_quality||t.management_notes||t.lessons_learned)?`<div style="margin-bottom:14px">
+    ${(t.plan_respected||t.execution_quality||t.management_notes||t.lessons)?`<div style="margin-bottom:14px">
       <div style="font-family:Arial,monospace;font-size:8px;color:var(--amber);letter-spacing:.14em;margin-bottom:6px">▪ GESTION &amp; CLÔTURE</div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">
         ${t.execution_quality?`<div class="chip"><span class="lbl">Qualité: </span><span class="val">${t.execution_quality}/10</span></div>`:''}
         ${planLabel?`<div class="chip"><span class="val">${planLabel}</span></div>`:''}
       </div>
-      ${t.management_notes?`<div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;font-size:11px;color:var(--text2);line-height:1.7;margin-bottom:6px">${esc(t.management_notes)}</div>`:''}
-      ${t.lessons_learned?`<div style="background:var(--bg3);border:1px solid var(--border);border-left:3px solid var(--amber);border-radius:var(--radius);padding:10px 12px;font-size:11px;color:var(--text2);line-height:1.7"><span style="color:var(--amber);font-family:Arial,monospace;font-size:8px;letter-spacing:.1em">LEÇON · </span>${esc(t.lessons_learned)}</div>`:''}
+      ${t.management_notes?`<div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;font-size:11px;color:var(--text2);line-height:1.7;margin-bottom:6px">${texteLignes(t.management_notes)}</div>`:''}
+      ${t.lessons?`<div style="background:var(--bg3);border:1px solid var(--border);border-left:3px solid var(--amber);border-radius:var(--radius);padding:10px 12px;font-size:11px;color:var(--text2);line-height:1.7"><span style="color:var(--amber);font-family:Arial,monospace;font-size:8px;letter-spacing:.1em">LEÇONS · </span>${texteLignes(t.lessons)}</div>`:''}
     </div>`:''}
 
     <button class="btn btn-amber btn-sm" type="button" style="width:100%;margin-top:6px" onclick="openTrade('${t.id}')">✏ Modifier ce trade</button>
@@ -1635,32 +2143,41 @@ async function showTradeDetailById(tradeId){
   if(overlay)overlay.style.display='block';
 
   // Charger les images en GRAND
+  // v=6 (constat 29) : un échec de lecture ou de signature est DIT (« Captures
+  // indisponibles (réseau ?) », Réessayer), distinct de « Aucune capture » (avant : un
+  // échec s'affichait « Aucune capture » ou faisait disparaître la section).
+  const TITRE_CAPTURES='<div style="font-family:Arial,monospace;font-size:8px;color:var(--amber);letter-spacing:.14em;margin-bottom:6px">▪ CAPTURES</div>';
+  const relancer=`showTradeDetailById(${escJs(t.id)})`;
   try{
-    const images=await loadTradeImages(t.id);
+    const images=await lireCapturesTrade(t.id);
     const container=document.getElementById('tjp-imgs-single');
     if(!container)return;
+    if(images===null){container.innerHTML=TITRE_CAPTURES+capturesIndispo(0,relancer);return;}
     if(!images.length){
-      container.innerHTML='<div style="font-family:Arial,monospace;font-size:8px;color:var(--amber);letter-spacing:.14em;margin-bottom:6px">▪ CAPTURES</div><div style="color:var(--text3);font-size:10px;text-align:center;padding:8px">Aucune capture</div>';
+      container.innerHTML=TITRE_CAPTURES+'<div style="color:var(--text3);font-size:10px;text-align:center;padding:8px">Aucune capture</div>';
       return;
     }
     const liens=await signerChemins(images.map(img=>img.storage_path));
-    const validImgs=images.filter(img=>liens[img.storage_path])
-      .map(img=>({url:liens[img.storage_path],type:img.image_type,name:img.filename}));
-    if(!validImgs.length){container.innerHTML='';return;}
-    // Regroupement par type (entry / close / file)
-    const groups={};
-    validImgs.forEach(r=>{(groups[r.type||'autre']=groups[r.type||'autre']||[]).push(r);});
-    container.innerHTML=`<div style="font-family:Arial,monospace;font-size:8px;color:var(--amber);letter-spacing:.14em;margin-bottom:6px">▪ CAPTURES</div>`+
-      Object.entries(groups).map(([type,imgs])=>`
+    if(!Object.keys(liens).length){container.innerHTML=TITRE_CAPTURES+capturesIndispo(0,relancer);return;}
+    const manquantes=images.filter(f=>estImage(f)&&!liens[f.storage_path]).length;
+    // v=6 (constat 31) : groupes aux libellés du journal ; une image en grand, un autre
+    // fichier par son NOM avec son lien (avant : un PDF dans une <img> cassée, sans nom).
+    const groupes={};
+    images.forEach(f=>{const g=LIBELLES_PJ[f.image_type]?f.image_type:'autre';(groupes[g]=groupes[g]||[]).push(f);});
+    const rendus=['entry','close','file','autre'].filter(g=>groupes[g]).map(g=>({g,html:groupes[g].map(f=>{
+      const url=liens[f.storage_path];
+      if(!estImage(f))return fichierHTML(f,url);
+      return url?`<img src="${esc(url)}" onclick="bigImg(${escJs(url)})" style="width:100%;max-height:280px;object-fit:contain;border-radius:3px;cursor:zoom-in;border:1px solid var(--border);background:var(--bg4)">`:'';
+    }).join('')})).filter(r=>r.html);
+    container.innerHTML=TITRE_CAPTURES+
+      rendus.map(r=>`
         <div style="margin-bottom:10px">
-          <div style="font-family:Arial,monospace;font-size:8px;color:var(--text3);text-transform:uppercase;letter-spacing:.1em;margin-bottom:4px">${esc(type)}</div>
-          <div style="display:flex;flex-wrap:wrap;gap:6px">
-            ${imgs.map(r=>`<img src="${r.url}" onclick="bigImg('${r.url}')" style="width:100%;max-height:280px;object-fit:contain;border-radius:3px;cursor:zoom-in;border:1px solid var(--border);background:var(--bg4)">`).join('')}
-          </div>
-        </div>`).join('');
+          <div style="font-family:Arial,monospace;font-size:8px;color:var(--text3);text-transform:uppercase;letter-spacing:.1em;margin-bottom:4px">${LIBELLES_PJ[r.g]||'Autres'}</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px">${r.html}</div>
+        </div>`).join('')+(manquantes?capturesIndispo(manquantes,relancer):'');
   }catch(e){
     const container=document.getElementById('tjp-imgs-single');
-    if(container)container.innerHTML='<div style="color:var(--text3);font-size:10px">Erreur de chargement des captures</div>';
+    if(container)container.innerHTML=TITRE_CAPTURES+capturesIndispo(0,relancer);
   }
 }
 
@@ -1724,7 +2241,13 @@ function buildDashMonthBtns(){
   }
 }
 
+// v=6 (revue) : l'année choisie au sélecteur (12 mois cochés) est un point de départ ;
+// le 1er clic sans Maj sur un mois l'affiche SEUL (avant : le clic retirait ce mois et
+// montrait les 11 autres ; glisser ne faisait plus rien).
+let S_dashAnneeEntiere=false;
 function toggleDashMonth(key,btn,shiftKey){
+  if(S_dashAnneeEntiere&&!shiftKey)S_dashMonths.clear();
+  S_dashAnneeEntiere=false;
   if(S_dashMonths.has(key)&&S_dashMonths.size===1){
     S_dashMonths.delete(key);btn.classList.remove('active');
   } else if(S_dashMonths.has(key)){
@@ -1738,8 +2261,13 @@ function toggleDashMonth(key,btn,shiftKey){
   }
 }
 
+// v=6 (AJOUT 5) : choisir une année sélectionne ses 12 mois (libellé « ANNÉE 2025 »).
+// Avant : aucun mois sélectionné → « ALL TIME » sur tout l'historique, alors que le
+// sélecteur « Période » affichait l'année choisie.
 function onDashYearChange(yr){
   S_dashYear=parseInt(yr);S_dashMonths.clear();
+  for(let m=0;m<12;m++)S_dashMonths.add(S_dashYear+'-'+m);
+  S_dashAnneeEntiere=true;
   buildDashMonthBtns();applyDashFilter();
 }
 
@@ -1765,12 +2293,11 @@ function applyDashFilter(){
   });
 }
 
+// v=6 : clé « année-mois » (mois 0-11) du jour du trade, en heure locale.
+function cleMoisDuTrade(t){const d=dateDuTrade(t);return d.getFullYear()+'-'+d.getMonth();}
+// v=6 (constat 10) : seulement les trades COMPTÉS (ni annulés, ni de test).
 function getTradesForMonths(keys){
-  return S.trades.filter(t=>{
-    const d=new Date(t.trade_date||t.created_at);
-    const k=d.getFullYear()+'-'+d.getMonth();
-    return keys.includes(k)&&t.status!=='cancelled';
-  });
+  return tradesComptes(S.trades).filter(t=>keys.includes(cleMoisDuTrade(t)));
 }
 
 // V9 FIX FND-007 : renderStatsByMonths n'acceptait pas son paramètre keys
@@ -1779,31 +2306,42 @@ function getTradesForMonths(keys){
 function renderStatsByMonths(keys) {
   // Fallback robuste si appelé sans paramètre
   const k = (Array.isArray(keys) && keys.length > 0) ? keys : [...S_dashMonths];
-  const trades = getTradesForMonths(k).filter(t => t.status !== 'cancelled');
-  const st = calcStats(trades);
-  let label = 'ALL TIME';
+  // v=6 : tous les trades des mois ; calcStats écarte annulés et tests (et compte ces derniers).
+  const st = calcStats(S.trades.filter(t => k.includes(cleMoisDuTrade(t))));
+  let label = 'ALL TIME', periode = 'tout l\'historique';
   if (k.length === 0) {
-    label = 'AUCUN MOIS';
+    label = 'AUCUN MOIS'; periode = 'aucun mois';
   } else if (k.length === 1) {
     const [y, m] = k[0].split('-').map(Number);
     const monthNames = ['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
     label = (monthNames[m] || '?').toUpperCase() + ' ' + y;
+    periode = (monthNames[m] || '?').toLowerCase() + ' ' + y;
+  } else if (new Set(k).size === 12 && k.every(x => x.split('-')[0] === k[0].split('-')[0])) {
+    // v=6 (AJOUT 5) : les 12 mois d'une même année.
+    const y = k[0].split('-')[0];
+    label = 'ANNÉE ' + y; periode = 'l\'année ' + y;
   } else {
-    label = k.length + ' MOIS SÉLECTIONNÉS';
+    label = k.length + ' MOIS SÉLECTIONNÉS'; periode = 'les ' + k.length + ' mois sélectionnés';
   }
-  renderStatsPanel(st, label);
-  calcAvgDuration(trades.filter(t => t.status === 'closed'));
+  renderStatsPanel(st, label, periode);
 }
 
 async function renderChartsByMonths(keys){
   if(!grapheDisponible(redessinerGraphiques))return;
-  if(S.chartRR)S.chartRR.destroy();
-  // Courbe PnL avec uniquement les trades des mois sélectionnés
-  const trades=getTradesForMonths(keys);
-  const{labels,data}=buildCumRRData(trades);
-  const canvas=document.getElementById('balChart');
-  makeBalChart(canvas,labels,data);
-  makeRRChart(keys); // 1 barre par trade dans la sélection
+  // v=6 : courbe et barres tracent la MÊME liste (trades comptés, clos, R saisi) de
+  // la période (keys vide/null = tout) ; avant, deux filtres distincts.
+  const{labels,data,trades}=buildCumRRData(buildTradesForRRChart(keys));
+  const vide=!trades.length;
+  if(vide){
+    if(S.chartBal)S.chartBal.destroy();
+    if(S.chartRR)S.chartRR.destroy();
+    S.chartBal=S.chartRR=null;S._rrChartTrades=[];
+  }
+  // APRÈS destroy() : Chart.js y rend au canvas son style d'origine (display compris).
+  grapheVide('bal-wrap','balChart',vide);grapheVide('rr-wrap','rrChart',vide);
+  if(vide)return;
+  makeBalChart(document.getElementById('balChart'),labels,data,trades);
+  makeRRChart(trades); // 1 barre par trade tracé
 }
 
 
@@ -1814,13 +2352,25 @@ async function renderChartsByMonths(keys){
 
 function renderJournal(){
   const list=document.getElementById('j-list');
-  if(!S.filtered.length){list.innerHTML='<div class="empty"><h3>Aucun trade</h3><p>+ Nouveau Trade pour commencer</p></div>';return;}
+  // v=6 (constat 3) : trades jamais lus (lecture en échec) → « non chargés », jamais
+  // « Aucun trade » (la recherche et les filtres du Journal rendent aussi la liste)
+  if(echecsLecture.trades==='jamais'){afficherTradesIndisponibles();return;}
+  if(!S.filtered.length){
+    // v=6 (constat 27) : des trades existent mais la recherche ou les filtres les masquent tous
+    const n=(S.trades||[]).length;
+    list.innerHTML=n
+      ?`<div class="empty"><h3>Aucun trade ne correspond aux filtres</h3><p>${n} trade${n>1?'s':''} au journal : change la recherche ou les filtres ci-dessus.</p></div>`
+      :'<div class="empty"><h3>Aucun trade</h3><p>+ Nouveau Trade pour commencer</p></div>';
+    return;
+  }
   list.innerHTML=S.filtered.map(tradeHTML).join('');
 }
 
 function tradeHTML(t){
-  const rr=+t.actual_rr||0,pnl=+t.pnl_amount||0;
-  const uColor=t.users?.color||'var(--text3)',uName=t.users?.name||'';
+  // v=6 (constat 0) : R saisi affiché (0 = BE compris, avant masqué) ; clos sans R :
+  // « Résultat non saisi », à compléter (avant : rien, comme un BE).
+  const res=resultatDuTrade(t),pnl=pnlDuTrade(t);
+  const uColor=couleurSure(t.users?.color,'var(--text3)'),uName=t.users?.name||'';
   const isOpen=t.status==='open';const statusColor=isOpen?'var(--blue)':t.status==='closed'?'var(--green2)':'var(--text3)';
   return `<div class="tj-item ${t.is_test?'is-test':''} status-${t.status}" id="tj-${t.id}">
     <div class="tj-hdr" onclick="toggleTJ('${t.id}')">
@@ -1830,13 +2380,13 @@ function tradeHTML(t){
         <span class="badge badge-${t.direction==='LONG'?'long':'short'}">${t.direction}</span>
         ${t.is_test?'<span class="badge badge-test">🧪TEST</span>':''}
         ${t.strategy?`<span style="color:var(--text3);font-size:10px;font-family:Arial,monospace">${esc(t.strategy)}</span>`:''}
-        <span style="color:var(--text3);font-size:9px;font-family:Arial,monospace">· ${fDate(t.trade_date||t.created_at)}</span>
+        <span style="color:var(--text3);font-size:9px;font-family:Arial,monospace">· ${dateTradeHTML(t)}</span>
         ${uName?`<span style="font-size:9px;font-family:Arial,monospace;padding:1px 6px;border-radius:2px;background:${uColor}22;color:${uColor};border:1px solid ${uColor}44">${esc(uName)}</span>`:''}
         <span class="badge badge-${t.status}">${isOpen?'⬤ EN COURS':t.status==='closed'?'✓ FERMÉ':'✗ ANNULÉ'}</span>
       </div>
       <div class="tj-right">
-        ${rr!==0?`<span class="${rr>=0?'pos':'neg'}" style="font-family:Arial,monospace;font-size:11px;font-weight:600">${rr>=0?'+':''}${rr.toFixed(2)}R</span>`:''}
-        ${pnl!==0?`<span class="${pnl>=0?'pos':'neg'}" style="font-family:Arial,monospace;font-size:10px">${pnl>=0?'$':'-$'}${Math.abs(pnl).toFixed(2)}</span>`:''}
+        ${res?`<span style="font-family:Arial,monospace;font-size:11px;font-weight:600;color:${res.col}">${res.texte}</span>`:(t.status==='closed'?'<span style="font-family:Arial,monospace;font-size:10px;color:var(--text3);white-space:nowrap">Résultat non saisi</span>':'')}
+        ${pnl?`<span style="font-family:Arial,monospace;font-size:10px;white-space:nowrap;color:${pnl.col}">${esc(pnl.texte)}</span>`:''}
         <button class="btn btn-ghost btn-sm" type="button" onclick="event.stopPropagation();openTrade('${t.id}')">✏</button>
         <span style="color:var(--text3);font-size:10px" id="arr-${t.id}">▼</span>
       </div>
@@ -1847,9 +2397,9 @@ function tradeHTML(t){
       <div class="quick-close-form" id="qcf-${t.id}">
         <div style="font-family:Arial,monospace;font-size:8px;color:var(--amber);letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px">CLÔTURE RAPIDE</div>
         <div class="g4">
-          <div class="fg"><label class="fl">Prix sortie</label><input type="number" class="f-inp" id="qc-exit-${t.id}" step="any" placeholder="0.00000" oninput="calcQuickRR('${t.id}','${t.direction}',${t.entry_price||0},${t.sl_price||0})"></div>
-          <div class="fg"><label class="fl">R:R réalisé</label><input type="number" class="f-inp" id="qc-rr-${t.id}" step="any" placeholder="Auto"></div>
-          <div class="fg"><label class="fl">P&L ($)</label><input type="number" class="f-inp" id="qc-pnl-${t.id}" step="any" placeholder="0.00"></div>
+          <div class="fg"><label class="fl">Prix sortie</label><input type="text" inputmode="decimal" class="f-inp" id="qc-exit-${t.id}" value="${esc(t.exit_price==null?'':String(t.exit_price))}" placeholder="prix de sortie" oninput="calcQuickRR('${t.id}','${t.direction}',${t.entry_price||0},${t.sl_price||0})"><div id="qc-exit-${t.id}-msg" style="display:none;font-size:10px;font-family:Arial,monospace;line-height:1.4"></div></div>
+          <div class="fg"><label class="fl">R:R réalisé</label><input type="text" inputmode="decimal" class="f-inp" id="qc-rr-${t.id}" value="${esc(t.actual_rr==null?'':String(t.actual_rr))}" placeholder="${rrCalculable(t.direction,t.entry_price,t.sl_price)?'Auto':'non renseigné'}" oninput="delete this.dataset.auto"><div id="qc-rr-${t.id}-msg" style="display:none;font-size:10px;font-family:Arial,monospace;line-height:1.4"></div></div>
+          <div class="fg"><label class="fl">${esc(libellePnl(t.account_id,t.accounts&&t.accounts.currency))}</label><input type="text" inputmode="decimal" class="f-inp" id="qc-pnl-${t.id}" value="${esc(t.pnl_amount==null?'':String(t.pnl_amount))}" placeholder="non renseigné"><div id="qc-pnl-${t.id}-msg" style="display:none;font-size:10px;font-family:Arial,monospace;line-height:1.4"></div></div>
           <div class="fg" style="justify-content:flex-end;padding-top:16px"><button class="btn btn-green btn-sm" type="button" onclick="submitQuickClose('${t.id}')">💾 Valider</button></div>
         </div>
       </div>`:''}
@@ -1858,6 +2408,7 @@ function tradeHTML(t){
 }
 
 function tradeBlockContent(t){
+  const res=resultatDuTrade(t),pnl=pnlDuTrade(t);
   return `
   <div class="tj-section">
     <div class="tj-section-lbl">Analyse</div>
@@ -1876,13 +2427,13 @@ function tradeBlockContent(t){
   <div class="tj-section">
     <div class="tj-section-lbl">Gestion & Clôture</div>
     <div class="chip-row">
-      ${t.exit_price?chip('Sortie',t.exit_price):''}${t.actual_rr?chipC('R:R réalisé',(t.actual_rr>=0?'+':'')+parseFloat(t.actual_rr).toFixed(2),t.actual_rr>=0?'var(--green)':'var(--red)'):''}${t.pnl_amount?chipC('P&L',(t.pnl_amount>=0?'$':'-$')+Math.abs(t.pnl_amount).toFixed(2),t.pnl_amount>=0?'var(--green)':'var(--red)'):''}${t.execution_quality?chip('Qualité',t.execution_quality+'/10'):''}${t.plan_respected?chip('Plan',{respected:'✅ Respecté',partial:'⚠ Partiel',not_respected:'❌ Non respecté'}[t.plan_respected]||t.plan_respected):''}</div>
+      ${t.exit_price?chip('Sortie',t.exit_price):''}${res?chipC('R:R réalisé',res.valeur,res.col):(t.status==='closed'?chipC('R:R réalisé','non saisi','var(--text3)'):'')}${pnl?chipC('P&L',pnl.texte,pnl.col):(t.status==='closed'?chipC('P&L','non saisi','var(--text3)'):'')}${t.execution_quality?chip('Qualité',t.execution_quality+'/10'):''}${t.plan_respected?chip('Plan',{respected:'✅ Respecté',partial:'⚠ Partiel',not_respected:'❌ Non respecté'}[t.plan_respected]||t.plan_respected):''}</div>
     ${t.management_notes?`<p style="font-size:11px;color:var(--text2);line-height:1.7;margin-bottom:5px"><span style="color:var(--amber);font-size:9px;font-family:Arial,monospace">GESTION · </span>${esc(t.management_notes).replace(/\n/g,'<br>')}</p>`:''}
     ${t.lessons?`<p style="font-size:11px;color:var(--text2);line-height:1.7"><span style="color:var(--amber);font-size:9px;font-family:Arial,monospace">LEÇONS · </span>${esc(t.lessons).replace(/\n/g,'<br>')}</p>`:''}
     <div class="img-grid" id="ig-close-${t.id}" style="margin-top:6px"></div>
   </div>
   <div class="tj-section">
-    <div class="tj-section-lbl">Fichiers</div>
+    <div class="tj-section-lbl">Analyse et fichiers</div>
     <div class="img-grid" id="ig-file-${t.id}"></div>
     <div id="fl-${t.id}"></div>
   </div>`;
@@ -1890,6 +2441,89 @@ function tradeBlockContent(t){
 
 function chip(l,v){return `<div class="chip"><span class="lbl">${esc(l)}: </span><span class="val">${esc(v)}</span></div>`;}
 function chipC(l,v,col){return `<div class="chip"><span class="lbl">${esc(l)}: </span><span style="color:${col};font-family:Arial,monospace">${esc(v)}</span></div>`;}
+// v=6 : texte libre multiligne (échappé, retours à la ligne gardés).
+function texteLignes(s){return esc(s).replace(/\n/g,'<br>');}
+// v=6 (constat 0) : résultat SAISI d'un trade, lu une seule fois pour le journal et le
+// panneau. null = R non saisi : ce n'est PAS un BE (avant : +t.actual_rr||0 en faisait
+// un « +0.00R » jaune) ; 0 saisi = BE, en jaune.
+function resultatDuTrade(t){
+  if(!aResultat(t))return null;
+  const rr=+t.actual_rr,valeur=(rr>0?'+':'')+rr.toFixed(2);
+  return {rr,valeur,texte:valeur+'R',col:rr>0?'var(--green)':(rr<0?'var(--red)':'var(--yellow)')};
+}
+// v=6 (constat 2 et 11, journal et panneau) : P&L SAISI d'un trade, dans la devise de
+// SON compte (« +150,00 $US », « -80,00 € ») ; null s'il n'est pas saisi, jamais « $0 ».
+// Avant : « $ » écrit en dur, et un 0 saisi masqué comme une absence.
+// v=6 (constat 11) : le P&L se saisit dans la devise du compte (avant : « P&L ($) » pour
+// tout compte, alors qu'il s'affiche dans la devise du compte ; un compte en EUR
+// poussait à saisir des dollars). Sans compte choisi, la devise n'est pas devinée.
+function libellePnl(compteId,devise){
+  const d=devise||((S.accounts||[]).find(a=>a.id===compteId)||{}).currency||'';
+  let sym=d;
+  if(d){try{sym=new Intl.NumberFormat('fr-FR',{style:'currency',currency:d}).formatToParts(0).find(p=>p.type==='currency').value;}catch(e){/* code ISO invalide : le code tel quel */}}
+  return 'P&L ('+(sym||'devise du compte')+')';
+}
+function majLibellePnl(){
+  const l=document.getElementById('m-pnl-lbl');if(!l)return;
+  const id=document.getElementById('m-acc')?.value||'';
+  const t=S.editId?(S.trades||[]).find(x=>x.id===S.editId):null;
+  l.textContent=libellePnl(id,t&&id&&t.account_id===id?t.accounts?.currency:'');
+}
+function pnlDuTrade(t){
+  if(!aPnl(t))return null;
+  const n=Math.round(+t.pnl_amount*100)/100,signe=n>0?'+':(n<0?'-':'');
+  const d=(t.accounts&&t.accounts.currency)||((S.accounts||[]).find(a=>a.id===t.account_id)||{}).currency||'';
+  const f={minimumFractionDigits:2,maximumFractionDigits:2};
+  let texte=null;
+  if(d){try{texte=signe+new Intl.NumberFormat('fr-FR',{style:'currency',currency:d,...f}).format(Math.abs(n));}catch(e){/* code ISO invalide */}}
+  if(texte===null)texte=signe+Math.abs(n).toLocaleString('fr-FR',f)+(d?' '+d:' (devise inconnue)');
+  return {n,texte,col:n>0?'var(--green)':(n<0?'var(--red)':'var(--text2)')};
+}
+// v=6 (constat 32) : date affichée d'un trade. Sans date de trade, on montre la date
+// de SAISIE en le disant (avant : created_at présenté comme la date du trade). Le tri
+// et les regroupements par mois gardent leur repli (règle ouverte, CLAUDE.md §4).
+// v=6 (constat 32) : même règle en texte brut (info-bulles des graphiques).
+function dateTradeTexte(t){return t.trade_date?fDate(t.trade_date):'date non saisie'+(t.created_at?' · saisi le '+fDate(t.created_at):'');}
+function dateTradeHTML(t){
+  if(t.trade_date)return esc(fDate(t.trade_date));
+  return `<span style="font-style:italic" title="Date du trade non saisie : c'est la date de saisie">date non saisie${t.created_at?' · saisi le '+esc(fDate(t.created_at)):''}</span>`;
+}
+
+// ─── v=6 (constat 31) : pièces jointes d'un trade ───
+// v=6 (AJOUT 3) : les captures « file » sont celles de l'onglet Analyse de la fiche (et les
+// fichiers joints des versions précédentes) : même libellé partout.
+const LIBELLES_PJ={entry:'Entrée',close:'Clôture',file:'Analyse et fichiers'};
+// Image ou autre fichier ? Le type MIME d'abord ; ligne ancienne sans type : d'après
+// l'extension (inconnue : image, comme avant).
+function estImage(f){
+  if(f&&f.mime_type)return /^image\//i.test(f.mime_type);
+  return !/\.(pdf|csv|xlsx?|xlsm|ods|docx?|odt|txt|zip)$/i.test(String((f&&(f.filename||f.storage_path))||''));
+}
+// Fichier non image : son NOM, et son lien s'il a pu être signé (sinon : dit).
+function fichierHTML(f,url){
+  const nom=esc(f.filename||String(f.storage_path||'').split('/').pop()||'fichier');
+  return `<div style="padding:2px 0;font-size:10px;color:var(--text2);font-family:Arial,monospace;width:100%">📄 ${url?`<a href="${safeUrl(url)}" target="_blank" rel="noopener" class="lien-fichier" style="color:var(--blue)">${nom}</a>`:`${nom} <span style="color:var(--text3)">— lien indisponible (réseau ?)</span>`}</div>`;
+}
+// v=6 (constat 29) : captures d'un trade ; null = lecture en échec, à ne pas confondre
+// avec [] = aucune capture (loadTradeImages rend [] dans les deux cas).
+async function lireCapturesTrade(id){
+  try{const{data,error}=await sb.from('trade_images').select('*').eq('trade_id',id);return error?null:(data||[]);}
+  catch(_){return null;}
+}
+// v=6 (constat 29) : message d'échec des captures, distinct de « Aucune capture ».
+// n = captures non affichées (0 : toutes, ou nombre inconnu) ; relancer = appel du
+// bouton Réessayer ; fiche = captures déjà enregistrées (inutile de les recoller).
+function capturesIndispo(n,relancer,fiche){
+  const s=n>1?'s':'';
+  const txt=n?`${n} capture${s}${fiche?` déjà enregistrée${s}`:''} indisponible${s} (réseau ?)`
+    :(fiche?'Captures déjà enregistrées indisponibles (réseau ?)':'Captures indisponibles (réseau ?)');
+  return `<div class="captures-indispo" style="width:100%;font-family:Arial,monospace;font-size:10px;color:var(--text3);padding:6px 0">⚠ ${txt}${fiche?` : inutile de ${n===1?'la':'les'} recoller.`:''}${relancer?` <button class="btn btn-ghost btn-sm" type="button" onclick="${relancer}">Réessayer</button>`:''}</div>`;
+}
+// Vignette (journal, fiche) : une image en miniature, un autre fichier par son nom.
+function vignetteHTML(f,url){
+  if(!estImage(f))return fichierHTML(f,url);
+  return url?`<img src="${esc(url)}" class="img-thumb" onclick="bigImg(${escJs(url)})">`:'';
+}
 
 function toggleTJ(id){
   const body=document.getElementById('body-'+id);const arr=document.getElementById('arr-'+id);
@@ -1899,29 +2533,40 @@ function toggleTJ(id){
 }
 
 async function loadImagesInView(tradeId){
-  const images=await loadTradeImages(tradeId);
+  const images=await lireCapturesTrade(tradeId);
+  // v=6 (constat 29) : lecture ou signature en échec → « Captures indisponibles (réseau
+  // ?) » avec Réessayer (avant : grilles vides, comme un trade sans capture).
+  const relancer=`loadImagesInView(${escJs(tradeId)})`;
+  const fl=document.getElementById(`fl-${tradeId}`);
+  const indisponible=()=>{
+    ['entry','close','file'].forEach((type,k)=>{const el=document.getElementById(`ig-${type}-${tradeId}`);if(el)el.innerHTML=k?'':capturesIndispo(0,relancer);});
+    if(fl)fl.innerHTML='';
+  };
+  if(images===null){indisponible();return;}
+  // v=6 (constat 31) : vignettes = images seulement ; tout autre fichier, quel que soit
+  // son onglet, est listé par son nom avec son lien (avant : un PDF d'Entrée ou de
+  // Clôture partait dans une <img> cassée, et celui de Fichiers n'avait pas de lien).
   const grilles=['entry','close','file'].map(type=>({
     el:document.getElementById(`ig-${type}-${tradeId}`),
-    imgs:images.filter(i=>i.image_type===type&&(i.mime_type?.startsWith('image/')||type!=='file')),
+    imgs:images.filter(i=>i.image_type===type&&estImage(i)),
   })).filter(g=>g.el);
+  if(fl)grilles.push({el:fl,imgs:images.filter(i=>!estImage(i))});
   grilles.forEach(g=>{g.el.innerHTML=g.imgs.length?'<div class="spin"></div>':'';});
   // v=5 : toutes les vignettes du trade signées en UNE requête (avant : une par image)
   const liens=await signerChemins(grilles.flatMap(g=>g.imgs.map(i=>i.storage_path)));
-  grilles.forEach(g=>{if(g.imgs.length)fillImgGrid(g.el,g.imgs,liens);});
-  const fl=document.getElementById(`fl-${tradeId}`);
-  if(fl){const nI=images.filter(i=>i.image_type==='file'&&!i.mime_type?.startsWith('image/'));if(nI.length)fl.innerHTML=nI.map(f=>`<div style="padding:2px 0;font-size:10px;color:var(--text2);font-family:Arial,monospace">📄 ${esc(f.filename)}</div>`).join('');}
+  if(grilles.some(g=>g.imgs.length)&&!Object.keys(liens).length){indisponible();return;}
+  grilles.forEach(g=>{if(g.imgs.length)fillImgGrid(g.el,g.imgs,liens,relancer);});
 }
 
 // liens : { chemin: url } déjà signés (signerChemins) ; sinon signés ici en une requête.
-async function fillImgGrid(container,imgs,liens){
+// v=6 (constat 29) : une capture non signée est comptée et dite (avant : absente sans trace).
+async function fillImgGrid(container,imgs,liens,relancer){
   if(!liens){
     container.innerHTML='<div class="spin"></div>';
     liens=await signerChemins(imgs.map(img=>img.storage_path));
   }
-  container.innerHTML=imgs.filter(img=>liens[img.storage_path]).map(img=>{
-    const url=liens[img.storage_path];
-    return `<img src="${url}" class="img-thumb" onclick="bigImg('${url}')">`;
-  }).join('');
+  const manquantes=imgs.filter(img=>estImage(img)&&!liens[img.storage_path]).length;
+  container.innerHTML=imgs.map(img=>vignetteHTML(img,liens[img.storage_path])).join('')+(manquantes?capturesIndispo(manquantes,relancer):'');
 }
 
 function filterJournal(){
@@ -1934,81 +2579,151 @@ function filterJournal(){
   renderJournal();
 }
 
+// ─── SAISIE DES NOMBRES (v=6, données honnêtes) ───
+// Message sous un champ (élément « <id>-msg ») ; texte vide = effacé.
+function msgChamp(id,texte,ton='err'){
+  const m=document.getElementById(id+'-msg');
+  if(m){m.textContent=texte||'';m.style.display=texte?'block':'none';m.style.color=ton==='info'?'var(--amber)':'var(--red)';}
+  const el=document.getElementById(id);
+  if(el){if(texte&&ton==='err')el.setAttribute('aria-invalid','true');else el.removeAttribute('aria-invalid');}
+}
+// Nombre d'un champ de saisie (« 1,5 » ou « 1.5 » ; vide = null). Un texte illisible est
+// signalé sous le champ et rendu NaN : l'appelant n'enregistre alors rien. Avant : champ
+// type=number, un Chrome en anglais lisait « 1,5 » comme 15, enregistré sans alerte.
+function nombreSaisi(id){
+  const v=lireDecimal(document.getElementById(id)?.value);
+  msgChamp(id,Number.isNaN(v)?'Nombre illisible : écris par exemple 1,5 ou -0,75.':'');
+  return v;
+}
+
 // ─── QUICK CLOSE ───
 function toggleQuickClose(id){const el=document.getElementById('qcf-'+id);if(el)el.classList.toggle('open');}
+// R calculable depuis les prix : entrée et SL saisis, risque positif dans le sens du trade.
+function rrCalculable(dir,entry,sl){return !!(+entry&&+sl&&(dir==='LONG'?entry-sl:sl-entry)>0);}
+// v=6 (données honnêtes) : le R « Auto » suit chaque frappe du prix de sortie tant que
+// l'utilisateur ne l'a pas tapé lui-même (dataset.auto, effacé par l'oninput de qc-rr).
+// Avant : figé au premier caractère (« 1 » de 149.10 → -245.33R enregistré).
 function calcQuickRR(id,dir,entry,sl){
-  const exit=+document.getElementById('qc-exit-'+id)?.value||0;
-  if(!exit||!entry||!sl)return;
-  const risk=dir==='LONG'?entry-sl:sl-entry;if(risk<=0)return;
-  const realized=dir==='LONG'?exit-entry:entry-exit;const rr=(realized/risk).toFixed(2);
-  const rrField=document.getElementById('qc-rr-'+id);if(rrField&&!rrField.value)rrField.value=rr;
+  const rrField=document.getElementById('qc-rr-'+id);if(!rrField)return;
+  if(rrField.value!==''&&rrField.dataset.auto!=='1')return;
+  const exit=lireDecimal(document.getElementById('qc-exit-'+id)?.value);
+  if(!exit||!rrCalculable(dir,entry,sl)){rrField.value='';delete rrField.dataset.auto;return;}
+  const risk=dir==='LONG'?entry-sl:sl-entry,realized=dir==='LONG'?exit-entry:entry-exit;
+  rrField.value=(realized/risk).toFixed(2);rrField.dataset.auto='1';
 }
 async function submitQuickClose(id){
-  const exit=+document.getElementById('qc-exit-'+id)?.value||null;
-  const rr=+document.getElementById('qc-rr-'+id)?.value||null;
-  const pnl=+document.getElementById('qc-pnl-'+id)?.value||null;
-  if(!rr&&!exit){toast('Entrez au moins le R:R réalisé','err');return;}
-  const{error}=await sb.from('trades').update({exit_price:exit,actual_rr:rr,pnl_amount:pnl,status:'closed'}).eq('id',id);
+  // v=6 (données honnêtes) : lireDecimal et non +v||null : un R ou un P&L de 0 (BE)
+  // s'enregistre 0 (avant : NULL, ou refus « Entrez au moins le R:R réalisé »).
+  const exit=nombreSaisi('qc-exit-'+id),rr=nombreSaisi('qc-rr-'+id),pnl=nombreSaisi('qc-pnl-'+id);
+  if([exit,rr,pnl].some(Number.isNaN)){toast('Nombre illisible : corrige le champ signalé (rien n\'est enregistré)','err');return;}
+  // v=6 (revue) : les champs reprennent les valeurs déjà saisies (tradeHTML) et un champ
+  // laissé vide GARDE la valeur en base (avant : NULL, un R ou un P&L saisi dans la fiche
+  // était effacé à la clôture). Seuls les champs tapés partent, avec le statut.
+  const t=(S.trades||[]).find(x=>x.id===id)||{};
+  const maj={status:'closed'};
+  if(exit!==null)maj.exit_price=exit;
+  if(rr!==null)maj.actual_rr=rr;
+  if(pnl!==null)maj.pnl_amount=pnl;
+  const{error,count}=await sb.from('trades').update(maj,{count:'exact'}).eq('id',id);
   if(error){toast('Erreur : '+error.message,'err');return;}
-  toast('Trade clôturé ✅','ok');await loadTrades();renderStats();await renderCharts();renderMonthly();renderJournal();
+  // v=6 (revue) : aucune ligne touchée (trade supprimé entre-temps, accès retiré) ≠ succès
+  if(count===0){toast('Rien n\'a été clôturé : ce trade n\'existe plus ou tu n\'y as plus accès.','err');await rechargerTrades(false);return;}
+  // v=6 (arbitrage du 20/10/2026) : clore sans R reste possible, mais le message le dit
+  // (avant : « Trade clôturé ✅ » seul, et le trade comptait comme un BE).
+  toast(rr===null&&!aResultat(t)?'Trade clôturé — R non saisi : mis à part dans les stats (complète-le dans le Journal)':'Trade clôturé ✅','ok');await rechargerTrades();
 }
 
 // ─── TRADE MODAL ───
 async function openTrade(id=null){
+  // v=6 (données honnêtes) : en vue d'un autre espace (admin), un nouveau trade partirait dans
+  // l'espace d'appartenance tout en étant rattaché à un compte de l'espace consulté.
+  if(!id&&S.currentWorkspaceId&&S.workspaceId&&S.currentWorkspaceId!==S.workspaceId){
+    toast(`Tu consultes ${S.currentWorkspace?.name||'un autre espace'} : reviens à ton espace (${S.workspace?.name||'espace d\'appartenance'}) pour créer un trade.`,'err');
+    return;
+  }
   resetModal();
-  document.getElementById('m-acc').innerHTML=S.accounts.map(a=>`<option value="${a.id}">${a.name}</option>`).join('');
-  document.getElementById('m-user').innerHTML='<option value="">—</option>'+S.users.map(u=>`<option value="${u.id}">${u.name}</option>`).join('');
+  const t=id?S.trades.find(x=>x.id===id):null;
+  // v=6 (données honnêtes) : compte et trader CHOISIS dans des listes visibles. Avant : champs
+  // cachés jamais remplis (erreur SQL brute) ou hérités du dernier trade ouvert, sans le dire.
+  // Présélection seulement s'il n'y a qu'un compte, et pour le trader connecté. La valeur d'un
+  // trade ouvert absente des listes (compte inactif…) y est ajoutée au lieu d'être perdue.
+  const comptes=[...S.accounts],traders=[...S.users];
+  // v=6 (revue) : comptes jamais lus (lecture en échec) ≠ « aucun compte actif » ; le compte du
+  // trade n'est alors pas dit « hors liste » (la liste n'a pas pu être lue).
+  const comptesNonCharges=echecsLecture.accounts==='jamais';
+  if(t?.account_id&&!comptes.some(a=>a.id===t.account_id))comptes.push({id:t.account_id,name:(t.accounts?.name||'Compte')+(comptesNonCharges?'':' (hors liste)')});
+  if(t?.user_id&&!traders.some(u=>u.id===t.user_id))traders.push({id:t.user_id,name:t.users?.name||'Trader'});
+  if(!t&&S.appUser&&!traders.some(u=>u.id===S.appUser.id))traders.push(S.appUser);
+  const options=(vide,l)=>`<option value="">${vide}</option>`+l.map(x=>`<option value="${esc(x.id)}">${esc(x.name)}</option>`).join('');
+  const acc=document.getElementById('m-acc'),usr=document.getElementById('m-user');
+  acc.innerHTML=options(comptes.length?'— Choisis un compte —':(comptesNonCharges?'— Comptes non chargés (réseau ou serveur) —':'— Aucun compte actif —'),comptes);
+  usr.innerHTML=options('— Choisis le trader —',traders);
   // V9.2 FIX FUSEAU : fmtYMD (local) au lieu de toISOString (UTC)
   document.getElementById('m-date').value=fmtYMD(new Date());
-  if(S.accId!=='all')document.getElementById('m-acc').value=S.accId;
-  if(S.user)document.getElementById('m-user').value=S.user.id;
   if(id){
     S.editId=id;document.getElementById('m-title').textContent='Modifier Trade';document.getElementById('del-btn').style.display='inline-flex';
-    const t=S.trades.find(x=>x.id===id);if(t)fillModal(t);
-    S.existingImgs=await loadTradeImages(id);await renderExistingImgs();
-  }else{S.editId=null;document.getElementById('m-title').textContent='Nouveau Trade';document.getElementById('del-btn').style.display='none';}
+    if(t)fillModal(t);
+    // v=6 (constat 29) : lecture en échec = null (dit dans l'onglet), distincte de [] (aucune).
+    S.existingImgs=await lireCapturesTrade(id);await renderExistingImgs();
+  }else{
+    S.editId=null;document.getElementById('m-title').textContent='Nouveau Trade';document.getElementById('del-btn').style.display='none';
+    if(comptes.length===1)acc.value=comptes[0].id;
+    if(S.appUser)usr.value=S.appUser.id;
+  }
+  majLibellePnl(); // v=6 (constat 11) : P&L dans la devise du compte choisi
   document.getElementById('trade-modal').classList.remove('hidden');
   initRichEditor();
 }
 
 function fillModal(t){
-  const fv=(id,v)=>{const el=document.getElementById(id);if(el)el.value=v||'';};
+  // v=6 (données honnêtes) : seul null donne un champ vide (avant : v||'') ; un 0 saisi
+  // (break-even) s'affiche « 0 » au lieu d'un vide lu comme un oubli puis écrasé.
+  const fv=(id,v)=>{const el=document.getElementById(id);if(el)el.value=v==null?'':String(v);};
   fv('m-instr',t.instrument);fv('m-dir',t.direction);fv('m-acc',t.account_id);fv('m-user',t.user_id);fv('m-date',t.trade_date);
   fv('m-sess',t.session);fv('m-tf',t.timeframe);fv('m-setup',t.setup_type);fv('m-strat',t.strategy);fv('m-analysis',t.analysis_notes);loadRichEditor(t.analysis_notes||'');
   fv('m-entry',t.entry_price);fv('m-sl',t.sl_price);fv('m-tp',t.tp_price);fv('m-lot',t.lot_size);fv('m-enotes',t.entry_notes);
   fv('m-exit',t.exit_price);fv('m-arr',t.actual_rr);fv('m-pnl',t.pnl_amount);fv('m-status',t.status);fv('m-plan',t.plan_respected);
-  fv('m-mgmt',t.management_notes);fv('m-lessons',t.lessons);
-  const q=document.getElementById('m-quality');q.value=t.execution_quality||7;document.getElementById('q-val').textContent=(t.execution_quality||7)+'/10';
+  // v=6 : qualité « non renseignée » tant qu'elle n'est pas choisie (avant : curseur à 7,
+  // enregistré 7/10 sur tout nouveau trade et à la place d'un NULL à chaque modification).
+  fv('m-mgmt',t.management_notes);fv('m-lessons',t.lessons);fv('m-quality',t.execution_quality);
+  // v=6 (arbitrage du 20/10/2026) : un trade clos sans R saisi le dit dans sa fiche.
+  if(t.status==='closed'&&!aResultat(t))msgChamp('m-arr','R non saisi : ce trade est mis à part dans les stats (0 = break-even).','info');
   calcRR();calcActualRR();
 }
 
 async function renderExistingImgs(){
   // v=5 : les captures des trois onglets signées en UNE requête (avant : une par image)
-  const images=S.existingImgs.filter(i=>i.mime_type?.startsWith('image/'));
+  // v=6 (constat 31) : un fichier non image est montré par son nom (avant : invisible).
+  // v=6 (constat 29) : lecture (S.existingImgs null) ou signature en échec → dit dans
+  // l'onglet, « déjà enregistrées » (avant : onglet vide, et on recollait des doublons).
+  // Pas de Réessayer ici : il effacerait les aperçus des captures pas encore envoyées.
+  if(S.existingImgs===null){['entry','close','file'].forEach(type=>{const c=document.getElementById('prev-'+type);if(c)c.innerHTML=capturesIndispo(0,null,true);});return;}
+  const images=S.existingImgs;
   const liens=await signerChemins(images.map(i=>i.storage_path));
   for(const type of['entry','close','file']){
     const imgs=images.filter(i=>i.image_type===type);
     const c=document.getElementById('prev-'+type);if(!c||!imgs.length)continue;
-    c.innerHTML=imgs.map(i=>{
-      const url=liens[i.storage_path];
-      return url?`<img src="${url}" class="img-thumb" onclick="bigImg('${url}')">`:'';
-    }).join('');
+    const manquantes=imgs.filter(i=>estImage(i)&&!liens[i.storage_path]).length;
+    c.innerHTML=imgs.map(i=>vignetteHTML(i,liens[i.storage_path])).join('')+(manquantes?capturesIndispo(manquantes,null,true):'');
   }
 }
 
+// v=6 (données honnêtes) : une fiche neuve repart d'un trade VIDE pour tous les champs que
+// fillModal remplit (un futur champ ne peut plus être oublié). Avant : seule une liste était
+// vidée ; session, unité de temps, setup (champs cachés), sens, statut, plan, compte et
+// trader du dernier trade ouvert partaient en silence avec le nouveau trade.
 function resetModal(){
   S.pendingUps=[];S.existingImgs=[];S.editId=null;
-  ['m-instr','m-strat','m-analysis','m-entry','m-sl','m-tp','m-lot','m-enotes','m-exit','m-arr','m-pnl','m-mgmt','m-lessons'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
-  const _ed=document.getElementById('m-analysis-editor');if(_ed)_ed.innerHTML='';
+  fillModal({direction:'LONG',status:'open'});
   document.getElementById('rr-display').textContent='Entrez entrée, SL et TP pour calculer le R:R.';
-  document.getElementById('arr-display').textContent='Entrez le prix de sortie pour calculer le R:R réalisé.';
-  document.getElementById('q-val').textContent='7/10';document.getElementById('m-quality').value=7;
+  const _ad=document.getElementById('arr-display');_ad.innerHTML='';_ad.style.display='none';
+  ['m-arr','m-pnl','m-acc','m-user','m-save'].forEach(id=>msgChamp(id,''));
   ['entry','close','file'].forEach(t=>{const el=document.getElementById('prev-'+t);if(el)el.innerHTML='';});
   document.getElementById('flist-modal').innerHTML='';mTab(0,document.querySelector('.modal-tab'));
 }
 
 function closeTrade(){document.getElementById('trade-modal').classList.add('hidden');}
-function mTab(idx,el){document.querySelectorAll('.modal-tab').forEach(t=>t.classList.remove('active'));document.querySelectorAll('.modal-tc').forEach(t=>t.classList.remove('active'));if(el)el.classList.add('active');document.getElementById('mt-'+idx).classList.add('active');}
+function mTab(idx,el){S.ongletFiche=idx;document.querySelectorAll('.modal-tab').forEach(t=>t.classList.remove('active'));document.querySelectorAll('.modal-tc').forEach(t=>t.classList.remove('active'));if(el)el.classList.add('active');document.getElementById('mt-'+idx).classList.add('active');}
 
 function calcRR(){
   const entry=+document.getElementById('m-entry').value,sl=+document.getElementById('m-sl').value,tp=+document.getElementById('m-tp').value;
@@ -2021,49 +2736,104 @@ function calcRR(){
   return+rr;
 }
 
+// v=6 (données honnêtes) : le R calculé depuis les prix (anciens trades) est PROPOSÉ
+// sous le champ, jamais écrit à la place de la saisie. Avant : il remplissait « R:R
+// réalisé » en silence (bandeau caché) et la sauvegarde l'enregistrait comme saisi,
+// y compris à la place d'un 0 (break-even).
 function calcActualRR(){
   const entry=+document.getElementById('m-entry').value,sl=+document.getElementById('m-sl').value,exit=+document.getElementById('m-exit').value;
   const dir=document.getElementById('m-dir').value,el=document.getElementById('arr-display');
-  if(!entry||!sl||!exit)return;const risk=dir==='LONG'?entry-sl:sl-entry;if(risk<=0)return;
+  const af=document.getElementById('m-arr');
+  el.innerHTML='';el.style.display='none';
+  if(!entry||!sl||!exit||af.value.trim()!=='')return;const risk=dir==='LONG'?entry-sl:sl-entry;if(risk<=0)return;
   const realized=dir==='LONG'?exit-entry:entry-exit,arr=(realized/risk).toFixed(2);
-  const af=document.getElementById('m-arr');if(!af.value)af.value=arr;
-  el.innerHTML=`R:R réalisé : <span style="color:${+arr>=0?'var(--green)':'var(--red)'};font-weight:700">${+arr>=0?'+':''}${arr}</span>`;
+  el.style.display='block';
+  el.innerHTML=`R:R non saisi. Calculé depuis les prix : <span style="color:${+arr>=0?'var(--green)':'var(--red)'};font-weight:700">${+arr>=0?'+':''}${arr}</span> <button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById('m-arr').value='${arr}';calcActualRR()">Utiliser cette valeur</button>`;
 }
 
+// Aperçu d'une capture en attente d'envoi dans la grille de son onglet (un fichier non image :
+// son nom dans la liste). enEchec : capture dont l'envoi a échoué, marquée pour le réessai.
+function apercuCapture(file,type,enEchec=false){
+  const c=document.getElementById('prev-'+type)||document.getElementById('prev-file');if(!c)return;
+  if(file.type.startsWith('image/')){const r=new FileReader();r.onload=e=>{const img=document.createElement('img');img.src=e.target.result;img.className='img-thumb';img.onclick=()=>bigImg(e.target.result);if(enEchec){img.style.outline='2px solid var(--red)';img.title='Non envoyée : « Sauvegarder » pour réessayer';}c.appendChild(img);};r.readAsDataURL(file);}
+  else{const fl=document.getElementById('flist-modal');if(fl){const d=document.createElement('div');d.style.cssText='padding:2px 0;font-size:10px;font-family:Arial,monospace;color:'+(enEchec?'var(--red)':'var(--text2)');d.textContent='📄 '+file.name+(enEchec?' (non envoyé)':'');fl.appendChild(d);}}
+}
 function addUpload(input,type){
-  Array.from(input.files).forEach(file=>{
-    S.pendingUps.push({file,type});const c=document.getElementById('prev-'+type)||document.getElementById('prev-file');if(!c)return;
-    if(file.type.startsWith('image/')){const r=new FileReader();r.onload=e=>{const img=document.createElement('img');img.src=e.target.result;img.className='img-thumb';img.onclick=()=>bigImg(e.target.result);c.appendChild(img);};r.readAsDataURL(file);}
-    else{const fl=document.getElementById('flist-modal');if(fl){const d=document.createElement('div');d.style.cssText='padding:2px 0;font-size:10px;color:var(--text2);font-family:Arial,monospace';d.textContent='📄 '+file.name;fl.appendChild(d);}}
-  });
+  Array.from(input.files).forEach(file=>{S.pendingUps.push({file,type});apercuCapture(file,type);});
 }
 
 async function saveTrade(){
   const btn=document.getElementById('save-btn');btn.disabled=true;btn.innerHTML='<div class="spin"></div>';
   try{
     const instr=document.getElementById('m-instr').value.trim().toUpperCase();if(!instr){toast('Instrument requis','err');return;}
+    // v=6 (données honnêtes) : compte et trader choisis, sinon rien n'est enregistré (avant :
+    // erreur SQL brute « null value in column "account_id"… », ou valeurs héritées).
+    const acc=document.getElementById('m-acc').value,usr=document.getElementById('m-user').value;
+    const motifCompte=echecsLecture.accounts==='jamais'?'Comptes non chargés (réseau ou serveur) : réessaie':'Choisis un compte';
+    msgChamp('m-acc',acc?'':motifCompte+'.');msgChamp('m-user',usr?'':'Choisis le trader.');
+    if(!acc||!usr){toast((acc?'Choisis le trader':motifCompte)+' (rien n\'est enregistré)','err');return;}
     const rr=calcRR();
     const status=document.getElementById('m-status').value;
-    const payload={instrument:instr,direction:document.getElementById('m-dir').value,account_id:document.getElementById('m-acc').value||null,user_id:document.getElementById('m-user').value||null,trade_date:document.getElementById('m-date').value||null,session:document.getElementById('m-sess').value||null,timeframe:document.getElementById('m-tf').value||null,setup_type:document.getElementById('m-setup').value||null,strategy:document.getElementById('m-strat').value||null,analysis_notes:document.getElementById('m-analysis').value||null,entry_price:+document.getElementById('m-entry').value||null,sl_price:+document.getElementById('m-sl').value||null,tp_price:+document.getElementById('m-tp').value||null,lot_size:+document.getElementById('m-lot').value||null,entry_notes:document.getElementById('m-enotes').value||null,exit_price:+document.getElementById('m-exit').value||null,risk_rr:rr,actual_rr:+document.getElementById('m-arr').value||null,pnl_amount:+document.getElementById('m-pnl').value||null,status,execution_quality:+document.getElementById('m-quality').value||null,plan_respected:document.getElementById('m-plan').value||null,management_notes:document.getElementById('m-mgmt').value||null,lessons:document.getElementById('m-lessons').value||null};
+    // v=6 (données honnêtes) : 0 reste 0, « 1,5 » vaut 1.5, un texte illisible est refusé.
+    const arr=nombreSaisi('m-arr'),pnl=nombreSaisi('m-pnl');
+    if(Number.isNaN(arr)||Number.isNaN(pnl)){mTab(2,document.querySelectorAll('.modal-tab')[2]);toast('Nombre illisible : corrige le champ signalé (rien n\'est enregistré)','err');return;}
+    const payload={instrument:instr,direction:document.getElementById('m-dir').value,account_id:acc,user_id:usr,trade_date:document.getElementById('m-date').value||null,session:document.getElementById('m-sess').value||null,timeframe:document.getElementById('m-tf').value||null,setup_type:document.getElementById('m-setup').value||null,strategy:document.getElementById('m-strat').value||null,analysis_notes:document.getElementById('m-analysis').value||null,entry_price:+document.getElementById('m-entry').value||null,sl_price:+document.getElementById('m-sl').value||null,tp_price:+document.getElementById('m-tp').value||null,lot_size:+document.getElementById('m-lot').value||null,entry_notes:document.getElementById('m-enotes').value||null,exit_price:+document.getElementById('m-exit').value||null,risk_rr:rr,actual_rr:arr,pnl_amount:pnl,status,execution_quality:lireDecimal(document.getElementById('m-quality').value),plan_respected:document.getElementById('m-plan').value||null,management_notes:document.getElementById('m-mgmt').value||null,lessons:document.getElementById('m-lessons').value||null};
     let tid=S.editId;
-    if(tid){const{error}=await sb.from('trades').update(payload).eq('id',tid);if(error)throw error;}
-    else{const{data,error}=await sb.from('trades').insert(payload).select().single();if(error)throw error;tid=data.id;}
-    await Promise.all(S.pendingUps.map(({file,type})=>uploadFile(file,tid,type)));
-    toast('Trade sauvegardé ✅','ok');closeTrade();await loadTrades();renderStats();await renderCharts();renderMonthly();renderJournal();
-  }catch(e){console.error(e);toast('Erreur : '+e.message,'err');}
+    if(tid){
+      const{error,count}=await sb.from('trades').update(payload,{count:'exact'}).eq('id',tid);if(error)throw error;
+      // v=6 (revue) : aucune ligne touchée (trade supprimé entre-temps, accès retiré) ≠ succès ;
+      // la fiche reste ouverte avec la saisie
+      if(count===0){const m='Rien n\'a été enregistré : ce trade n\'existe plus ou tu n\'y as plus accès (ta saisie reste dans la fiche).';msgChamp('m-save',m);toast(m,'err');await rechargerTrades(false);return;}
+    }
+    else{
+      const{data,error}=await sb.from('trades').insert(payload).select().single();if(error)throw error;tid=data.id;
+      // v=6 : le trade existe désormais ; une nouvelle sauvegarde (réessai) le modifie au lieu
+      // d'en créer un second.
+      S.editId=tid;
+    }
+    // v=6 (données honnêtes) : chaque capture est vérifiée. En cas d'échec, la fiche reste
+    // ouverte avec les seules captures à renvoyer, et le message le dit. Avant : « Trade
+    // sauvegardé ✅ », fiche fermée, captures perdues en silence.
+    const envois=S.pendingUps.slice();
+    const res=await Promise.allSettled(envois.map(({file,type})=>uploadFile(file,tid,type)));
+    const echecs=envois.filter((_,i)=>res[i].status!=='fulfilled'||!res[i].value?.ok);
+    if(echecs.length){
+      S.pendingUps=echecs;
+      document.getElementById('m-title').textContent='Modifier Trade';document.getElementById('del-btn').style.display='inline-flex';
+      S.existingImgs=await lireCapturesTrade(tid);
+      ['entry','close','file'].forEach(t=>{const el=document.getElementById('prev-'+t);if(el)el.innerHTML='';});
+      document.getElementById('flist-modal').innerHTML='';
+      await renderExistingImgs();
+      echecs.forEach(({file,type})=>apercuCapture(file,type,true));
+      const n=echecs.length,noms=echecs.map(e=>e.file.name).join(', ');
+      const bilan=`Trade enregistré, mais ${n} capture${n>1?'s':''} sur ${envois.length} non envoyée${n>1?'s':''} (${noms})`;
+      msgChamp('m-save',bilan+'. Elle'+(n>1?'s sont restées':' est restée')+' dans la fiche : « Sauvegarder » pour réessayer.');
+      toast(bilan+' : réessaie','err');
+      await rechargerTrades();return;
+    }
+    toast(status==='closed'&&arr===null?'Trade sauvegardé — R non saisi : mis à part dans les stats':'Trade sauvegardé ✅','ok');closeTrade();await rechargerTrades();
+  }catch(e){console.error(e);toast('Erreur : '+(e?.code==='23502'?'un champ obligatoire est vide':e.message),'err');}
   finally{btn.disabled=false;btn.innerHTML='💾 Sauvegarder';}
 }
 
+// v=6 (données honnêtes) : rend {ok:true} ou {ok:false,nom,etape}. Avant : un échec d'envoi
+// était seulement journalisé et l'enregistrement en base jamais vérifié. Si l'enregistrement
+// échoue, le fichier envoyé est retiré du stockage (au mieux : ce retrait peut être refusé).
 async function uploadFile(file,tradeId,imageType){
   const ext=file.name.split('.').pop();const path=`trades/${tradeId}/${imageType}/${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
-  const{error}=await sb.storage.from(BUCKET).upload(path,file);if(error){console.error(error);return;}
-  await sb.from('trade_images').insert({trade_id:tradeId,image_type:imageType,storage_path:path,filename:file.name,file_size:file.size,mime_type:file.type});
+  const envoi=await sb.storage.from(BUCKET).upload(path,file);
+  if(envoi.error){console.error(envoi.error);return {ok:false,nom:file.name,etape:'envoi'};}
+  const{error}=await sb.from('trade_images').insert({trade_id:tradeId,image_type:imageType,storage_path:path,filename:file.name,file_size:file.size,mime_type:file.type});
+  if(error){console.error(error);try{await sb.storage.from(BUCKET).remove([path]);}catch(_){}return {ok:false,nom:file.name,etape:'enregistrement'};}
+  return {ok:true};
 }
 
 async function deleteTrade(){
   showConfirm('Supprimer ce trade ?','Action irréversible.',async()=>{
-    const{error}=await sb.from('trades').delete().eq('id',S.editId);if(error){toast('Erreur','err');return;}
-    toast('Trade supprimé','ok');closeTrade();await loadTrades();renderStats();await renderCharts();renderMonthly();renderJournal();
+    const{error,count}=await sb.from('trades').delete({count:'exact'}).eq('id',S.editId);if(error){toast('Erreur','err');return;}
+    // v=6 (revue) : aucune ligne supprimée (déjà supprimé, accès retiré) ≠ « Trade supprimé »
+    if(count===0){toast('Rien n\'a été supprimé : ce trade n\'existe plus ou tu n\'y as plus accès.','err');closeTrade();await rechargerTrades(false);return;}
+    toast('Trade supprimé','ok');closeTrade();await rechargerTrades();
   });
 }
 
@@ -2079,34 +2849,50 @@ const TEST_TRADES=[
 ];
 
 async function insertTestData(){
-  const accId=S.accounts[0]?.id,userId=S.appUser?.id;
-  if(!accId){toast('Aucun compte disponible','err');return;}
-  // V9b : si on est en mode "vue d'un autre workspace", prévenir
+  // v=6 (constats 68-69) : en vue d'un autre espace, les trades test partiraient
+  // dans l'espace d'appartenance (déclencheur), rattachés à un compte de l'espace
+  // consulté. On refuse et on dit pourquoi (avant : avertissement aussitôt effacé
+  // par « 7 trades test insérés ✅ »).
   if (S.currentWorkspaceId && S.workspaceId && S.currentWorkspaceId !== S.workspaceId) {
-    toast('⚠ Les données test iront dans ton workspace d\'appartenance (' + (S.workspace?.name || '?') + '), pas dans la vue active.', 'err');
+    toast('Tu consultes ' + (S.currentWorkspace?.name || '?') + ' : reviens à ton espace (' + (S.workspace?.name || '?') + ') pour insérer des données test.', 'err');
+    return;
   }
-  const{error}=await sb.from('trades').insert(TEST_TRADES.map(t=>({...t,account_id:accId,user_id:userId})));
-  if(error){toast('Erreur : '+error.message,'err');return;}
-  toast(TEST_TRADES.length+' trades test insérés ✅','ok');
-  await loadTrades();
-  if(S_dashMonths.size>0)applyDashFilter();else{renderStats();renderCharts();}
-  renderMonthly();renderJournal();
+  const accId=S.accounts[0]?.id,userId=S.appUser?.id;
+  if(!accId){toast(echecsLecture.accounts?'Comptes non chargés (réseau ou serveur) : réessaie avant d\'insérer des données test.':'Aucun compte actif dans ton espace : impossible de rattacher les données test.','err');return;}
+  const{error,count}=await sb.from('trades').insert(TEST_TRADES.map(t=>({...t,account_id:accId,user_id:userId})),{count:'exact'});
+  if(error){toast('Données test non insérées : '+messageErreur(error)+'.','err');return;}
+  // Succès dit avec le nombre COMPTÉ par le serveur, l'espace et les dates (hors du mois affiché).
+  const annees=[...new Set(TEST_TRADES.map(t=>t.trade_date.slice(0,4)))].join(', ');
+  toast((count==null?'Données test insérées':count+' trade(s) test inséré(s)')+' dans '+(S.workspace?.name||'ton espace')+' (datés de '+annees+') ✅','ok');
+  await rechargerTrades();
 }
 
+// v=6 (constat 67) : ces suppressions n'ont aucun filtre d'espace ; seule la règle
+// d'accès les borne (super-admin : tous les espaces ; membre : tout son espace).
+// La confirmation dit cette portée et le bilan donne le nombre COMPTÉ par le
+// serveur (avant : « Données test supprimées » même quand rien ne l'était).
+function bilanSuppression(count,quoi,aucun){
+  if(count==null)return 'Suppression faite (nombre non communiqué par le serveur)';
+  return count===0?aucun:count+' '+quoi;
+}
+function vueActive(){return S.currentWorkspace?.name||'la vue active';}
 async function deleteTestData(){
-  showConfirm('Supprimer les données test ?','Tous les trades TEST seront supprimés.',async()=>{
-    const{error}=await sb.from('trades').delete().eq('is_test',true);
-    if(error){toast('Erreur : '+error.message,'err');return;}
-    toast('Données test supprimées','ok');await loadTrades();renderStats();await renderCharts();renderMonthly();renderJournal();
+  const portee=S.isSuperAdmin
+    ?'Tous les trades TEST de TOUS les espaces auxquels tu as accès seront supprimés, pas seulement ceux de '+vueActive()+'.'
+    :'Tous les trades TEST de l\'espace '+(S.workspace?.name||'?')+' seront supprimés'+(S.workspace?.is_shared?', y compris ceux des autres membres.':'.');
+  showConfirm('Supprimer les données test ?',portee,async()=>{
+    const{error,count}=await sb.from('trades').delete({count:'exact'}).eq('is_test',true);
+    if(error){toast('Données test non supprimées : '+messageErreur(error)+'.','err');return;}
+    toast(bilanSuppression(count,'trade(s) test supprimé(s)','Aucun trade test à supprimer'),'ok');await rechargerTrades();
   });
 }
 
 function confirmReset(){
   if(!S.isSuperAdmin){toast('Action réservée à l\'administrateur','err');return;}
-  showConfirm('⚠ Réinitialiser TOUTES les données ?','Tous les trades (réels et test) seront supprimés. IRRÉVERSIBLE.',async()=>{
-    const{error}=await sb.from('trades').delete().neq('id','00000000-0000-0000-0000-000000000000');
-    if(error){toast('Erreur : '+error.message,'err');return;}
-    toast('Toutes les données supprimées','ok');await loadTrades();renderStats();await renderCharts();renderMonthly();renderJournal();
+  showConfirm('⚠ Supprimer tous les trades ?','Tous les trades (réels et test) de TOUS les espaces auxquels tu as accès seront supprimés, pas seulement ceux de '+vueActive()+'. Comptes, soldes et rapports ne sont pas touchés. IRRÉVERSIBLE.',async()=>{
+    const{error,count}=await sb.from('trades').delete({count:'exact'}).neq('id','00000000-0000-0000-0000-000000000000');
+    if(error){toast('Trades non supprimés : '+messageErreur(error)+'.','err');return;}
+    toast(bilanSuppression(count,'trade(s) supprimé(s), tous espaces confondus','Aucun trade à supprimer'),'ok');await rechargerTrades();
   },'TOUT SUPPRIMER');
 }
 
@@ -2121,9 +2907,13 @@ let S_rptMonth = fmtYM(new Date());
 
 function initCurrencyWeek(){
   const now=new Date();
-  S_rptMonth=fmtYM(now);
   const day=now.getDay();
   const mon=new Date(now);mon.setDate(now.getDate()-(day===0?6:day-1));
+  // v=6 (AJOUT 1) : le mois affiché est celui du LUNDI courant (une semaine est
+  // listée dans le mois de son lundi) ; avant, du 1er au 4/10, octobre s'ouvrait
+  // sur la semaine du 28/09 avec « 26 Oct → 1 Nov » surligné.
+  S_rptMonth=fmtYM(mon);
+  S._rptLundi=fmtYMD(mon);S._rptSemaineChoisie=false; // v=6 (AJOUT 6)
   const wd=document.getElementById('rpt-week');if(wd)wd.value=fmtYMD(mon);
 }
 
@@ -2147,61 +2937,139 @@ function focusCurZone(code, zone){
 }
 
 async function setCurImg(code,zone,file){
+  // v=6 (constat 50) : jamais d'envoi sur une semaine non lue (Ctrl+V reste possible)
+  if(S._rptCharge!==true){toast('Rapport de la semaine non chargé : capture non enregistrée','err');return;}
   if(!window._curImgCache)window._curImgCache={};
   const key=zone+'-'+code;
+  // v=6 (constat 52) : la capture affichée avant ce dépôt, remise si l'envoi échoue
+  const avant=window._curImgCache[key]||null;
+  if(avant?.uploading){toast('Envoi déjà en cours sur cette zone : attends la fin','err');return;}
+  // v=6 (constat 51) : la capture appartient à la semaine CHARGÉE au moment du
+  // dépôt ; si l'on change de semaine pendant l'envoi, elle est enregistrée dans
+  // SA semaine sans rien modifier à l'écran de l'autre, et le message la nomme.
+  const cible={gen:S._rptGen,semaine:S._rptSemaine,ws:S._rptWs};
   // 1) Affichage immédiat via dataURL pour feedback instantané
   const dataUrl=await new Promise(res=>{const r=new FileReader();r.onload=e=>res(e.target.result);r.readAsDataURL(file);});
-  window._curImgCache[key]={url:dataUrl,isRemote:false,uploading:true};
+  if(S._rptGen!==cible.gen){toast('Semaine changée avant l\'envoi : capture non enregistrée','err');return;}
+  const apercu={url:dataUrl,isRemote:false,uploading:true};
+  window._curImgCache[key]=apercu;
+  montrerCapture(code,zone,apercu);
+  const ici=()=>S._rptGen===cible.gen&&window._curImgCache[key]===apercu; // l'écran montre encore cet envoi
+  // 2) Persister en DB immédiatement
+  try{
+    const{path,url}=await persistCurImg(code,zone,file,cible);
+    if(ici()){const fin={url:url||dataUrl,isRemote:true,path,signeLe:url?Date.now():0};window._curImgCache[key]=fin;montrerCapture(code,zone,fin);}
+    toast('Capture enregistrée : '+code+' · '+libZone(zone)+' — sem. du '+jourMois(cible.semaine)+' ✅','ok');
+  }catch(e){
+    console.error('Image upload failed:',e);
+    // v=6 (constat 52) : l'ancienne capture est intacte en base → elle revient ;
+    // l'aperçu non enregistré ne reste jamais affiché comme une capture.
+    if(ici()){window._curImgCache[key]=avant;montrerCapture(code,zone,avant);}
+    toast('Capture non enregistrée ('+code+' · '+libZone(zone)+') : '+(e.message||e),'err');
+  }
+}
+// v=6 (constat 62) : le nom de la zone tel que l'écran l'affiche (avant, toute
+// zone du BILAN était annoncée « Graphique Hebdo »). BILAN_ZONES est lu à l'appel.
+function libZone(z){
+  if(z==='pm')return 'Politique Monétaire';
+  if(z==='gh')return 'Graphique Hebdomadaire';
+  const b=BILAN_ZONES.find(x=>x.key===z);
+  return b?b.title:z;
+}
+// Affiche dans la zone ce que dit le cache (capture, envoi en cours, ou rien).
+// Les éléments sont relus par id : un rendu a pu les remplacer entre-temps.
+// v=6 (AJOUT 7) : {attente} = capture dont le lien se renouvelle (zone marquée,
+// sans image cassée) ; {ko} = capture qui ne peut pas s'afficher, et c'est dit.
+function montrerCapture(code,zone,c){
   const img=document.getElementById('cpimg-'+zone+'-'+code);
   const hint=document.getElementById('cphint-'+zone+'-'+code);
   const zoneEl=document.getElementById('cpz-'+zone+'-'+code);
-  if(img){img.src=dataUrl;img.style.display='block';}
-  if(hint)hint.style.display='none';
-  if(zoneEl){zoneEl.classList.add('has-img');zoneEl.classList.add('uploading');}
-  // 2) Persister en DB immédiatement
-  try{
-    await persistCurImg(code,zone,file);
-    if(zoneEl)zoneEl.classList.remove('uploading');
-    if(window._curImgCache[key])window._curImgCache[key].uploading=false;
-    toast(code+' · '+(zone==='pm'?'Politique Monétaire':'Graphique Hebdo')+' sauvegardé ✅','ok');
-  }catch(e){
-    console.error('Image upload failed:',e);
-    if(zoneEl)zoneEl.classList.remove('uploading');
-    toast('Erreur upload image : '+(e.message||e),'err');
+  const src=(c&&!c.attente&&!c.ko&&c.url)||'';
+  const pleine=!!src||!!(c&&c.attente);
+  if(img){img.src=src;img.style.display=src?'block':'none';}
+  if(hint){
+    hint.style.display=pleine?'none':'';
+    const txt=hint.querySelector('.txt'); // texte du gabarit gardé, remis hors échec
+    if(txt){
+      if(txt._invite===undefined)txt._invite=txt.innerHTML;
+      txt.innerHTML=c&&c.ko?'⚠ Capture indisponible (lien expiré ou réseau) — rouvre l\'onglet Rapports pour la recharger':txt._invite;
+    }
   }
+  if(zoneEl){zoneEl.classList.toggle('has-img',pleine);zoneEl.classList.toggle('uploading',!!(c&&c.uploading));}
+}
+// v=6 (AJOUT 7) : filet — une capture qui ne se charge pas le dit, au lieu d'une
+// image cassée. Un src vide est une zone vide, pas une erreur.
+function captureIndisponible(img){
+  if(!img||!img.getAttribute('src'))return;
+  const m=/^cpimg-([a-z]+)-([A-Z]+)$/.exec(img.id||'');
+  if(m)montrerCapture(m[2],m[1],{ko:true});
+}
+// v=6 (AJOUT 7) : un lien signé vaut 1 h (signerChemins). Avant d'afficher une
+// capture dont le lien a plus de 50 min, on signe de nouveau, en UN lot, toutes
+// les captures périmées de la semaine ; en attendant, la zone reste marquée.
+const LIEN_VALIDE_MS=50*60*1000;
+function lienPerime(c){return !!(c&&c.isRemote&&c.path&&Date.now()-(c.signeLe||0)>LIEN_VALIDE_MS);}
+function afficherCaptures(code,zones){
+  const cache=window._curImgCache||{},gen=S._rptGen;
+  let perimees=false;
+  for(const zone of zones){
+    const c=cache[zone+'-'+code];if(!c)continue;
+    if(lienPerime(c)){perimees=true;montrerCapture(code,zone,{attente:true});}
+    else montrerCapture(code,zone,c);
+  }
+  if(perimees)resignerCaptures().then(()=>{
+    if(gen!==S._rptGen||S_curCode!==code)return; // autre semaine ou autre devise : son rendu s'en charge
+    const c2=window._curImgCache||{};
+    for(const zone of zones){const c=c2[zone+'-'+code];if(c)montrerCapture(code,zone,lienPerime(c)?{ko:true}:c);}
+  });
+}
+let _resignature=null;
+function resignerCaptures(){
+  if(_resignature)return _resignature; // un seul lot à la fois, partagé
+  const gen=S._rptGen,cache=window._curImgCache||{};
+  const cles=Object.keys(cache).filter(k=>lienPerime(cache[k]));
+  _resignature=signerChemins(cles.map(k=>cache[k].path)).then(liens=>{
+    if(gen!==S._rptGen)return;
+    const t=Date.now();
+    for(const k of cles){const c=cache[k];if(c&&liens[c.path]){c.url=liens[c.path];c.signeLe=t;}}
+  }).finally(()=>{_resignature=null;});
+  return _resignature;
 }
 
-// Upload + INSERT idempotent (supprime l'image existante avant)
-async function persistCurImg(code,zone,file){
-  const week=document.getElementById('rpt-week')?.value;
-  const wsId=S.currentWorkspaceId||S.workspaceId;
-  if(!week||!wsId)throw new Error('Semaine ou workspace manquant');
+// Upload + INSERT ; v=6 (constat 52) : l'ancienne capture de la zone n'est retirée
+// qu'APRÈS l'enregistrement de la nouvelle (avant : retirée d'abord, perdue si
+// l'envoi échouait). v=6 (constat 51) : vers la semaine et l'espace du dépôt
+// (cible) ; rend {path,url}.
+async function persistCurImg(code,zone,file,cible){
+  const c=cible||{gen:S._rptGen,semaine:S._rptSemaine,ws:S._rptWs};
+  const week=c.semaine,wsId=c.ws;
+  if(!week||!wsId)throw new Error('Semaine ou espace manquant');
   // a) Récupérer ou créer le report
   let rptId=null;
-  const{data:ex}=await sb.from('currency_reports').select('id').eq('week_start',week).eq('workspace_id',wsId).maybeSingle();
+  const{data:ex,error:le}=await sb.from('currency_reports').select('id').eq('week_start',week).eq('workspace_id',wsId).maybeSingle();
+  if(le)throw le;
   if(ex)rptId=ex.id;
   else{
     const{data:nr,error}=await sb.from('currency_reports').insert({week_start:week,workspace_id:wsId}).select().single();
     if(error)throw error;
     rptId=nr.id;
   }
-  S._currentRptId=rptId;
+  // v=6 (constat 51) : « rapport courant » seulement si l'écran montre toujours cette semaine
+  if(S._rptGen===c.gen)S._currentRptId=rptId;
   // b) Récupérer ou créer l'entry
   let entryId=null;
-  const{data:ex2}=await sb.from('currency_report_entries').select('id').eq('report_id',rptId).eq('currency',code).maybeSingle();
+  const{data:ex2,error:le2}=await sb.from('currency_report_entries').select('id').eq('report_id',rptId).eq('currency',code).maybeSingle();
+  if(le2)throw le2;
   if(ex2)entryId=ex2.id;
   else{
     const{data:ne,error}=await sb.from('currency_report_entries').insert({report_id:rptId,currency:code,last_edited_by_client:CLIENT_ID}).select().single();
     if(error)throw error;
     entryId=ne.id;
-    if(S._entryIdToCurrency)S._entryIdToCurrency[entryId]=code;
+    if(S._entryIdToCurrency&&S._rptGen===c.gen)S._entryIdToCurrency[entryId]=code;
   }
-  // c) Supprimer les anciennes images de cette zone
-  const{data:olds}=await sb.from('currency_report_images').select('id,storage_path').eq('entry_id',entryId).eq('image_type',zone);
-  if(olds&&olds.length){
-    for(const o of olds){try{await sb.storage.from(BUCKET).remove([o.storage_path]);}catch(_){}}
-    await sb.from('currency_report_images').delete().eq('entry_id',entryId).eq('image_type',zone);
-  }
+  // c) Anciennes images de cette zone : lues maintenant, retirées après (f)
+  const{data:olds,error:le3}=await sb.from('currency_report_images').select('id,storage_path').eq('entry_id',entryId).eq('image_type',zone);
+  if(le3)throw le3;
   // d) Upload Storage
   const ext=((file.name||'img').split('.').pop()||'png').toLowerCase().replace(/[^a-z0-9]/g,'')||'png';
   const path=`currency/${rptId}/${code}/${zone}_${Date.now()}.${ext}`;
@@ -2212,55 +3080,120 @@ async function persistCurImg(code,zone,file){
     entry_id:entryId,storage_path:path,filename:zone+'.'+ext,
     file_size:file.size,image_type:zone,uploaded_by_client:CLIENT_ID
   });
-  if(ie)throw ie;
-  // f) Cache local avec signed URL
+  if(ie){try{await sb.storage.from(BUCKET).remove([path]);}catch(_){}throw ie;} // pas de fichier orphelin
+  // f) La nouvelle est enregistrée : on retire les anciennes, par leurs ids. Un
+  // échec laisse un doublon, sans perte (le chargement garde la plus récente).
+  if(olds&&olds.length){
+    try{
+      const{error:de}=await sb.from('currency_report_images').delete().in('id',olds.map(o=>o.id));
+      if(de)throw de;
+      const{error:re}=await sb.storage.from(BUCKET).remove(olds.map(o=>o.storage_path));
+      if(re)console.error('Fichier de l\'ancienne capture non retiré :',re);
+    }catch(e){console.error('Ancienne capture non retirée (doublon sans perte) :',e);}
+  }
+  // g) Lien signé du fichier qu'on vient de déposer (le cache est l'affaire de setCurImg)
+  let url=null;
   try{
     const{data:u}=await sb.storage.from(BUCKET).createSignedUrl(path,3600);
-    if(u){window._curImgCache[zone+'-'+code]={url:u.signedUrl,isRemote:true,path};}
+    url=u?.signedUrl||null;
   }catch(_){}
+  return{path,url};
 }
 
 // Suppression : DB + Storage + cache local
+// v=6 (constat 53) : la capture ne disparaît pour de bon qu'une fois retirée en
+// base (chaque lecture et le DELETE sont vérifiés) ; un échec la remet et le dit,
+// un succès aussi. Pas de suppression pendant son envoi (elle reviendrait).
 async function clearCurImg(code,zone){
+  if(S._rptCharge!==true){toast('Rapport de la semaine non chargé : rien n\'est supprimé','err');return;} // v=6 (constat 50)
   const key=zone+'-'+code;
-  const img=document.getElementById('cpimg-'+zone+'-'+code);
-  const hint=document.getElementById('cphint-'+zone+'-'+code);
-  const zoneEl=document.getElementById('cpz-'+zone+'-'+code);
-  if(img){img.src='';img.style.display='none';}
-  if(hint)hint.style.display='';
-  if(zoneEl)zoneEl.classList.remove('has-img');
+  const avant=(window._curImgCache||{})[key]||null;
+  if(avant?.uploading){toast('Envoi en cours : attends la fin pour supprimer cette capture','err');return;}
+  const gen=S._rptGen,week=S._rptSemaine,wsId=S._rptWs;
   if(window._curImgCache)window._curImgCache[key]=null;
+  montrerCapture(code,zone,null);
   try{
-    const week=document.getElementById('rpt-week')?.value;
-    const wsId=S.currentWorkspaceId||S.workspaceId;
-    if(!week||!wsId)return;
-    const{data:rpt}=await sb.from('currency_reports').select('id').eq('week_start',week).eq('workspace_id',wsId).maybeSingle();
-    if(!rpt)return;
-    const{data:entry}=await sb.from('currency_report_entries').select('id').eq('report_id',rpt.id).eq('currency',code).maybeSingle();
-    if(!entry)return;
-    const{data:imgs}=await sb.from('currency_report_images').select('id,storage_path').eq('entry_id',entry.id).eq('image_type',zone);
+    if(!week||!wsId)throw new Error('Semaine ou espace manquant');
+    const{data:rpt,error:e1}=await sb.from('currency_reports').select('id').eq('week_start',week).eq('workspace_id',wsId).maybeSingle();
+    if(e1)throw e1;
+    // Pas de rapport, d'entrée ou de ligne : rien n'est en base, la zone est déjà vide
+    const{data:entry,error:e2}=rpt?await sb.from('currency_report_entries').select('id').eq('report_id',rpt.id).eq('currency',code).maybeSingle():{data:null};
+    if(e2)throw e2;
+    const{data:imgs,error:e3}=entry?await sb.from('currency_report_images').select('id,storage_path').eq('entry_id',entry.id).eq('image_type',zone):{data:[]};
+    if(e3)throw e3;
     if(imgs&&imgs.length){
-      for(const i of imgs){try{await sb.storage.from(BUCKET).remove([i.storage_path]);}catch(_){}}
-      await sb.from('currency_report_images').delete().eq('entry_id',entry.id).eq('image_type',zone);
+      const{error:de}=await sb.from('currency_report_images').delete().in('id',imgs.map(i=>i.id));
+      if(de)throw de;
+      // Lignes retirées : un fichier resté dans le stockage est invisible (orphelin), on le note
+      try{const{error:re}=await sb.storage.from(BUCKET).remove(imgs.map(i=>i.storage_path));if(re)console.error('Fichier de capture non retiré (orphelin) :',re);}
+      catch(re){console.error('Fichier de capture non retiré (orphelin) :',re);}
     }
-  }catch(e){console.error('clearCurImg DB:',e);}
+    toast('Capture supprimée : '+code+' · '+libZone(zone),'ok');
+  }catch(e){
+    console.error('clearCurImg DB:',e);
+    if(S._rptGen===gen&&window._curImgCache&&window._curImgCache[key]===null){window._curImgCache[key]=avant;montrerCapture(code,zone,avant);}
+    toast('Capture non supprimée ('+code+' · '+libZone(zone)+') : '+(e.message||e),'err');
+  }
 }
 
+// v=6 (constat 49) : ouvrir l'onglet Rapports enregistre d'abord la saisie en
+// cours ; si c'est impossible, la vue reste telle quelle (rien n'est effacé).
+// v=6 (AJOUT 6) : page restée ouverte d'une semaine à l'autre — la semaine
+// courante (◆) est recalculée ; si l'utilisateur n'a pas choisi de semaine, la
+// nouvelle semaine courante s'ouvre (après l'enregistrement de l'ancienne).
 async function loadCurrencyReport(){
-  flushCurrentViewToCache();
+  if(!(await flushAndSaveBeforeSwitch())){toast('Saisie du rapport non enregistrée : elle reste à l\'écran, réessaie','err');return;}
+  const lundi=lundiDe(fmtYMD(new Date()));
+  if(S._rptLundi&&S._rptLundi!==lundi){
+    if(S._rptSemaineChoisie){
+      S._rptLundi=lundi;
+      // v=6 (revue) : nouveau mois proposé ; la semaine choisie et son mois restent affichés
+      if(construireBarreMois()){activerMois(S_rptMonth);const mp=document.getElementById('rpt-month-pick');if(mp)mp.value=S_rptMonth;}
+      buildWeeksForMonth(S_rptMonth);
+    }
+    else buildRptMonthBar();
+  }
+  await chargerRapport();
+}
+// Charge la semaine du champ rpt-week. Appelée après un flush réussi (ou une
+// saisie que l'utilisateur a choisi d'abandonner) : les caches peuvent repartir
+// de zéro. S._rptSemaine / S._rptWs = la semaine et l'espace CHARGÉS, où
+// partent les enregistrements (jamais la valeur courante du champ).
+async function chargerRapport(){
   const week=document.getElementById('rpt-week')?.value;
   if(!week)return;
   // V9.3 FIX FND-001 : filtre par workspace_id (rapports partagés)
   const wsId=S.currentWorkspaceId||S.workspaceId;
+  // v=6 (constat 50) : rien d'éditable tant que la semaine n'est pas lue
+  // (S._rptCharge) ; S._rptGen distingue ce chargement des suivants.
+  const gen=S._rptGen=(S._rptGen||0)+1;
+  S._rptCharge=false;S._rptErreur=null;S._rptSemaine=week;S._rptWs=wsId;
+  // v=6 (constat 49) : un échec abandonné ne reste pas affiché sur une autre semaine
+  if(['error','saving'].includes(document.getElementById('autosave-indicator')?.className))afficherSauvegarde(''); // v=6 (revue) : « En cours… » d'une autre semaine non plus
+  renderCurrencyView();
   let q=sb.from('currency_reports').select('*,currency_report_entries(*,currency_report_images(*))').eq('week_start',week);
   if(wsId)q=q.eq('workspace_id',wsId);
-  const{data}=await q.maybeSingle();
+  let rep;
+  try{rep=await q.maybeSingle();}catch(e){rep={data:null,error:e};}
+  if(gen!==S._rptGen)return; // un chargement plus récent a pris la main
+  const{data,error}=rep;
   window._curBiasCache={};window._curNotesCache={};window._curImgCache={};
   window._curLastSaved={}; // V9.4 — reset signatures pour le merge save
   // V9.4 : track le report id courant pour la synchro realtime
-  S._currentRptId=data?.id||null;
+  // v=6 (constat 50) : jamais l'id d'une autre semaine (les écritures y partiraient)
+  S._currentRptId=null;
   // V9.4 : map entry_id → currency pour les updates realtime
   S._entryIdToCurrency={};
+  if(error){
+    // v=6 (constat 50) : une lecture ratée (réseau, doublon…) n'est pas une
+    // semaine vide : on le dit, on propose de réessayer, rien n'est modifiable.
+    console.error('Lecture du rapport impossible :',error);
+    S._rptErreur=error.message||String(error);
+    renderCurrencyView();refreshCurrencyBtnColors();
+    subscribeRealtimeForCurrentReport(); // sans rapport : se désabonne
+    return;
+  }
+  S._currentRptId=data?.id||null;
   if(data){
     const aSigner=[]; // v=5 : [zone, devise, chemin] signés ensuite en UNE requête
     for(const entry of(data.currency_report_entries||[])){
@@ -2282,10 +3215,15 @@ async function loadCurrencyReport(){
       }
     }
     const liens=await signerChemins(aSigner.map(a=>a[2]));
+    if(gen!==S._rptGen)return;
+    const signeLe=Date.now(); // v=6 (AJOUT 7) : un lien signé vaut 1 h
     for(const[zone,code,chemin]of aSigner){
-      if(liens[chemin])window._curImgCache[zone+'-'+code]={url:liens[chemin],isRemote:true,path:chemin};
+      // v=6 (revue) : sans lien signé (réseau, refus), la capture n'est pas une zone vide :
+      // elle passe par le renouvellement (AJOUT 7), puis « Capture indisponible ».
+      window._curImgCache[zone+'-'+code]=liens[chemin]?{url:liens[chemin],isRemote:true,path:chemin,signeLe}:{url:null,isRemote:true,path:chemin,signeLe:0};
     }
   }
+  S._rptCharge=true;
   renderCurrencyView();refreshCurrencyBtnColors();
   // V9.4 : (re)connecter le canal realtime pour cette semaine
   subscribeRealtimeForCurrentReport();
@@ -2304,21 +3242,62 @@ function flushCurrentViewToCache(){
     window._curNotesCache[code]=sanitizeNotesHtml(raw);
   }
 }
+// v=6 (constat 49) : la saisie diffère-t-elle de ce qui est en base ? Une devise
+// sans signature compte comme [null,null] : tout effacer est une modification à
+// écrire ; visiter une devise vide sans rien taper n'en est pas une.
+function signatureSaisie(code){
+  const b=(window._curBiasCache||{})[code],n=(window._curNotesCache||{})[code];
+  return JSON.stringify([b===undefined||b===''?null:b,n===undefined||n===''?null:n]);
+}
+function rapportModifie(){
+  const enBase=window._curLastSaved||{};
+  return [...CURRENCIES.map(c=>c.code),'BILAN'].some(code=>signatureSaisie(code)!==(enBase[code]??'[null,null]'));
+}
 // V9.4 : sauve bias + notes avant changement. Les images sont déjà persistées au dépôt.
+// v=6 (constat 49) : rend true si l'on peut quitter la semaine affichée (tout est
+// écrit, ou rien n'a changé), false si l'enregistrement a échoué : la saisie reste
+// alors à l'écran et en cache, l'indicateur le dit. La minuterie d'auto-save est
+// annulée : c'est ce flush qui enregistre (encore une fois si l'on a tapé pendant).
 async function flushAndSaveBeforeSwitch(){
+  clearTimeout(_autoSaveTimer);
   flushCurrentViewToCache();
-  const week=document.getElementById('rpt-week')?.value;
-  if(!week)return;
-  const hasData=Object.values(window._curBiasCache||{}).some(v=>v)
-              ||Object.values(window._curNotesCache||{}).some(v=>v);
-  if(!hasData)return;
+  if(S._rptCharge!==true||!rapportModifie())return true; // rien d'éditable, ou rien de changé
   try{
-    await saveCurrencyReport(true);
+    let g;
+    do{
+      g=++_autoSaveGen;afficherSauvegarde('cours');
+      await saveCurrencyReport(true);
+      clearTimeout(_autoSaveTimer);
+    }while(g!==_autoSaveGen);
+    afficherSauvegarde('ok');
+    return true;
   }catch(e){
     console.error('Flush save failed:',e);
-    toast('⚠ Sauvegarde échouée avant changement','err');
+    afficherSauvegarde('erreur');
+    return false;
   }
 }
+// v=6 (constats 49, 58) : la saisie n'a pas pu être écrite → rien ne change
+// (semaine, mois, espace) ; continuer quand même, c'est l'abandonner : on le
+// demande (jamais en silence).
+function proposerAbandon(continuer){
+  showConfirm('Saisie non enregistrée',
+    'Ta saisie de la semaine du '+jourMois(S._rptSemaine)+' n\'est pas en base. Rien n\'a changé : réessaie (indicateur en bas à droite), ou continue quand même en abandonnant cette saisie.',
+    ()=>{clearTimeout(_autoSaveTimer);continuer();},'Abandonner ma saisie');
+}
+// v=6 (constat 58) : changement d'espace — le rapport affiché appartenait à
+// l'autre espace : plus aucune écriture n'y part et la vue ne le montre plus
+// (rechargée si Rapports est ouvert, sinon au prochain clic sur l'onglet).
+function quitterRapport(){
+  clearTimeout(_autoSaveTimer);
+  S._rptGen=(S._rptGen||0)+1; // un envoi en vol finit dans son espace, sans toucher l'écran
+  S._currentRptId=null;S._rptCharge=false;S._rptErreur=null;S._entryIdToCurrency={};
+  window._curBiasCache={};window._curNotesCache={};window._curImgCache={};window._curLastSaved={};
+  unsubscribeRealtime();
+  if(['error','saving'].includes(document.getElementById('autosave-indicator')?.className))afficherSauvegarde(''); // v=6 (revue) : « En cours… » d'une autre semaine non plus
+  renderCurrencyView();refreshCurrencyBtnColors();
+}
+function jourMois(ymd){return ymd?ymd.slice(8,10)+'/'+ymd.slice(5,7):'';}
 
 // ════════════════════════════════════════════════════════════════════
 // V9.4 — ÉDITEUR RICH-TEXT (Gras, Italique, Souligné, Surlignage 4 couleurs)
@@ -2341,6 +3320,9 @@ function sanitizeNotesHtml(html){
       if(c.nodeType===1){ // ELEMENT
         const tag=c.tagName;
         if(!ALLOWED_INLINE_TAGS.includes(tag)){
+          // v=6 (FND-02 complété) : nettoyer les enfants AVANT de les sortir de la
+          // balise retirée — sortis, ils ne seraient plus parcourus par cette boucle.
+          walk(c);
           while(c.firstChild)c.parentNode.insertBefore(c.firstChild,c);
           c.parentNode.removeChild(c);
           continue;
@@ -2363,7 +3345,8 @@ function sanitizeNotesHtml(html){
           Array.from(c.attributes).forEach(a=>c.removeAttribute(a.name));
           if(hex&&ALLOWED_TEXT_COLORS.includes(hex))c.style.color=hex;
           else{
-            // span sans couleur valide → on le déballe
+            // span sans couleur valide → on le déballe (enfants nettoyés d'abord, v=6)
+            walk(c);
             while(c.firstChild)c.parentNode.insertBefore(c.firstChild,c);
             c.parentNode.removeChild(c);
             continue;
@@ -2618,7 +3601,7 @@ function refreshPeersBadge(){
   const text=document.getElementById('presence-text');
   if(!indicator||!text)return;
   if(peersOnCur.length>0){
-    text.innerHTML=peersOnCur.map(p=>`<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${p.color};margin-right:4px"></span>${esc(p.user)} édite ${S_curCode}`).join(' &nbsp;·&nbsp; ');
+    text.innerHTML=peersOnCur.map(p=>`<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${couleurSure(p.color,'#f0c040')};margin-right:4px"></span>${esc(p.user)} édite ${S_curCode}`).join(' &nbsp;·&nbsp; ');
     indicator.classList.add('visible');
     clearTimeout(_presenceTimer);
     // Garde l'indicateur visible tant qu'il y a quelqu'un
@@ -2758,54 +3741,76 @@ async function onRemoteImageChange(payload){
 // Désabonnement automatique quand on quitte la section currency
 window.addEventListener('beforeunload',()=>{try{unsubscribeRealtime();}catch(_){}});
 
-async function saveCurrencyReport(silent=false){
-  flushCurrentViewToCache();
-  const week=document.getElementById('rpt-week')?.value;
-  const wsId=S.currentWorkspaceId||S.workspaceId;
-  if(!week){if(!silent)toast('Sélectionnez une semaine','err');return;}
-  if(!wsId){if(!silent)toast('Workspace inconnu, sauvegarde impossible','err');return;}
+// v=6 (constat 59) : les enregistrements passent l'un après l'autre — deux
+// INSERT simultanés de la même entrée, ou un UPDATE ancien arrivé après un plus
+// récent, ne sont plus possibles.
+let _rptEcritures=Promise.resolve();
+function saveCurrencyReport(silent=false){
+  const gen=S._rptGen;
+  const tour=_rptEcritures.then(()=>enregistrerRapport(silent,gen));
+  _rptEcritures=tour.catch(()=>{});
+  return tour;
+}
+// v=6 (constat 48) : en mode silencieux (auto-save, changement de semaine), un
+// échec REMONTE à l'appelant — avant, il était avalé et l'indicateur affichait
+// « ✓ Sauvegardé » pour un texte qui n'était pas en base. Les lectures sont
+// vérifiées : une entrée illisible n'est plus prise pour une entrée absente.
+async function enregistrerRapport(silent,gen){
   try{
+    if(gen!==S._rptGen)return; // v=6 : semaine quittée entre-temps (saisie abandonnée)
+    // v=6 (constat 50) : jamais d'écriture sur une semaine non lue (elle écraserait l'existant)
+    if(S._rptCharge!==true)throw new Error('Rapport de la semaine non chargé');
+    flushCurrentViewToCache();
+    // v=6 (constat 49) : la semaine et l'espace CHARGÉS — pas le champ, qui porte
+    // déjà la date suivante quand on change de semaine — et les caches de CETTE
+    // semaine (un rechargement les remplace par d'autres objets).
+    const week=S._rptSemaine,wsId=S._rptWs;
+    if(!window._curLastSaved)window._curLastSaved={};
+    const biais=window._curBiasCache||{},notes=window._curNotesCache||{},enBase=window._curLastSaved;
+    if(!week)throw new Error('Semaine non chargée');
+    if(!wsId)throw new Error('Espace inconnu, sauvegarde impossible');
     // V9.4 — saveCurrencyReport ne touche QUE bias + notes (images via persistCurImg).
     let rptId=S._currentRptId;
     if(!rptId){
-      const{data:ex}=await sb.from('currency_reports').select('id').eq('week_start',week).eq('workspace_id',wsId).maybeSingle();
+      const{data:ex,error:le}=await sb.from('currency_reports').select('id').eq('week_start',week).eq('workspace_id',wsId).maybeSingle();
+      if(le)throw le;
       if(ex)rptId=ex.id;
       else{
         const{data:nr,error}=await sb.from('currency_reports').insert({week_start:week,workspace_id:wsId}).select().single();
         if(error)throw error;
         rptId=nr.id;
       }
-      S._currentRptId=rptId;
+      if(S._rptGen===gen)S._currentRptId=rptId;
     }
-    if(!window._curLastSaved)window._curLastSaved={};
     let touchedSomething=false;
     // V9.10 — On itère sur les 8 devises + l'entry spéciale BILAN (notes uniquement)
     const saveCodes=[...CURRENCIES.map(c=>c.code),'BILAN'];
     for(const code of saveCodes){
       // Valeurs CURRENTES en cache local
-      const localBias=(window._curBiasCache||{})[code];      // string | undefined | ''
-      const localNotes=(window._curNotesCache||{})[code];    // string | undefined
+      const localBias=biais[code];      // string | undefined | ''
+      const localNotes=notes[code];     // string | undefined
       const localBiasNorm=(localBias===undefined||localBias==='')?null:localBias;
       const localNotesNorm=(localNotes===undefined||localNotes==='')?null:localNotes;
       // Signature pour le shortcut "rien à faire"
       const sig=JSON.stringify([localBiasNorm,localNotesNorm]);
-      if(window._curLastSaved[code]===sig)continue;
+      if((enBase[code]??'[null,null]')===sig)continue; // v=6 : sans signature = [null,null]
       // Lire l'entry existante pour merge intelligent
-      const{data:ex2}=await sb.from('currency_report_entries').select('id,bias,notes,last_edited_by_client').eq('report_id',rptId).eq('currency',code).maybeSingle();
+      const{data:ex2,error:le2}=await sb.from('currency_report_entries').select('id,bias,notes,last_edited_by_client').eq('report_id',rptId).eq('currency',code).maybeSingle();
+      if(le2)throw le2;
       // V9.4 FIX BIAS — Merge intelligent :
       // Si on n'a JAMAIS touché à ce champ localement (cache vide pour cette devise),
       // on PRÉSERVE la valeur distante. Cela évite d'écraser les notes/bias d'un autre user
       // quand on enregistre sur une autre devise.
-      const everTouchedHere=window._curLastSaved.hasOwnProperty(code+'__touched');
+      const everTouchedHere=enBase.hasOwnProperty(code+'__touched');
       // Champ par champ : si jamais touché localement → garde la valeur distante
-      const biasInCache=(window._curBiasCache||{}).hasOwnProperty(code);
-      const notesInCache=(window._curNotesCache||{}).hasOwnProperty(code);
+      const biasInCache=biais.hasOwnProperty(code);
+      const notesInCache=notes.hasOwnProperty(code);
       const mergedBias=biasInCache?localBiasNorm:(ex2?.bias||null);
       const mergedNotes=notesInCache?localNotesNorm:(ex2?.notes||null);
       // Skip si rien à enregistrer
-      if(mergedBias===null&&mergedNotes===null&&!ex2){window._curLastSaved[code]=sig;continue;}
+      if(mergedBias===null&&mergedNotes===null&&!ex2){enBase[code]=sig;continue;}
       // Skip si l'entry existante a déjà ces valeurs
-      if(ex2&&ex2.bias===mergedBias&&ex2.notes===mergedNotes){window._curLastSaved[code]=sig;continue;}
+      if(ex2&&ex2.bias===mergedBias&&ex2.notes===mergedNotes){enBase[code]=sig;continue;}
       const payload={bias:mergedBias,notes:mergedNotes,last_edited_by_client:CLIENT_ID,updated_at:new Date().toISOString()};
       if(ex2){
         const{error}=await sb.from('currency_report_entries').update(payload).eq('id',ex2.id);
@@ -2813,16 +3818,18 @@ async function saveCurrencyReport(silent=false){
       }else{
         const{data:ne,error}=await sb.from('currency_report_entries').insert({report_id:rptId,currency:code,...payload}).select().single();
         if(error)throw error;
-        if(ne&&S._entryIdToCurrency)S._entryIdToCurrency[ne.id]=code;
+        if(ne&&S._entryIdToCurrency&&S._rptGen===gen)S._entryIdToCurrency[ne.id]=code;
       }
-      window._curLastSaved[code]=JSON.stringify([mergedBias,mergedNotes]);
+      enBase[code]=JSON.stringify([mergedBias,mergedNotes]);
       touchedSomething=true;
     }
     if(touchedSomething){
-      await sb.from('currency_reports').update({updated_at:new Date().toISOString()}).eq('id',rptId);
+      // La saisie est écrite ; seule la date du rapport ne suit pas : on le note.
+      const{error:de}=await sb.from('currency_reports').update({updated_at:new Date().toISOString()}).eq('id',rptId);
+      if(de)console.error('Date du rapport non mise à jour :',de);
     }
     if(!silent)toast('Rapport sauvegardé ✅','ok');
-  }catch(e){console.error(e);if(!silent)toast('Erreur : '+e.message,'err');}
+  }catch(e){console.error(e);if(silent)throw e;toast('Erreur : '+(e.message||e),'err');}
 }
 
 // ─── MONTH/WEEK SELECTORS ───
@@ -2964,7 +3971,7 @@ const MACRO_TABS = [
   {
     key:'trade', label:'Balance commerciale', icon:'⚖️',
     subs:[
-      {key:'balance', label:'Solde commercial', unit:'', desc:"Solde de la balance commerciale (exports − imports). Unité propre à chaque zone (Mds)."},
+      {key:'balance', label:'Solde commercial', unit:'', desc:"Solde de la balance commerciale (exports − imports), en milliards dans la devise de la zone (Mds USD pour les États-Unis, Mds EUR pour la zone euro…)."},
     ]
   },
   {
@@ -2981,6 +3988,10 @@ const MACRO_TABS = [
 // ════════════════════════════════════════════════════════════════════
 // Structure : MACRO_DATA[zoneCode][tabKey][subKey] = [ {d:'YYYY-MM', v:valeur}, ... ]
 //   d = mois de référence de la donnée (YYYY-MM)
+//       v=6 (#42) PIB (gdp) : trimestriel, d = DERNIER mois du trimestre (T1 → 'AAAA-03'),
+//       affiché « T1 AAAA » (jamais le mois de publication : il donnerait un trimestre faux)
+//       v=6 (#44) balance commerciale (trade) : en MILLIARDS de la devise de la zone (le code
+//       de zone est le code ISO de la devise) ; convertir si la source publie en millions
 //   v = valeur (nombre) ou null si non disponible
 // Les séries sont triées par date croissante. L'historique se complète au fil
 // des mises à jour. Quand une valeur est inconnue, on ne l'invente pas (absente).
@@ -3074,12 +4085,30 @@ let _macroChart = null;
 
 const MACRO_COLORS = ['#f5a623','#00d68f','#4da6ff','#ff4d6a','#9b8cff','#00cec9','#fd79a8','#e17055'];
 
+// v=6 (UX-03) — Âge du relevé macro en mois entiers (dates locales, sans
+// millisecondes) : les chiffres sont saisis à la main, rien ne les actualise.
+function ageReleveMacro(maintenant=new Date()){
+  const [y,m,d]=MACRO_DATA_UPDATED.split('-').map(Number);
+  let mois=(maintenant.getFullYear()-y)*12+(maintenant.getMonth()-(m-1));
+  if(maintenant.getDate()<d)mois--;
+  return Math.max(0,mois);
+}
+function afficherFraicheurMacro(){
+  const el=document.getElementById('macro-fraicheur');if(!el)return;
+  const mois=ageReleveMacro();
+  el.hidden=mois<1;
+  el.textContent=mois<1?'':'⚠ Chiffres relevés à la main le '+fmtDateFr(MACRO_DATA_UPDATED)
+    +' (il y a '+(mois>=12?'plus d\'un an':mois+' mois')+') : ils ne se mettent pas à jour tout seuls. '
+    +'Vérifie la dernière publication officielle avant de t\'en servir.';
+}
+
 function loadMacro(force){
   // Garantir que le sous-indicateur courant existe dans l'onglet courant
   const tab=MACRO_TABS.find(t=>t.key===S_macroTab)||MACRO_TABS[0];
   if(!tab.subs.find(s=>s.key===S_macroSub))S_macroSub=tab.subs[0].key;
   const badge=document.getElementById('macro-updated-badge');
-  if(badge)badge.textContent='maj : '+fmtDateFr(MACRO_DATA_UPDATED);
+  if(badge)badge.textContent='relevé du '+fmtDateFr(MACRO_DATA_UPDATED);
+  afficherFraicheurMacro();
   buildMacroZoneBar();
   buildMacroTabBar();
   buildMacroSubBar();
@@ -3217,16 +4246,16 @@ function getMacroSeries(zoneCode){
     .sort((a,b)=>a.ym<b.ym?-1:a.ym>b.ym?1:0);
 }
 
-// V9.13 — Tronque une série mensuelle aux N dernières années (selon S_macroPeriod)
-function limitMonthlyToPeriod(series){
+// V9.13 — Tronque une série mensuelle à la période choisie (S_macroPeriod, en années)
+// v=6 (#39) : UNE borne commune à toutes les zones, ancrée sur le mois courant (et non
+// sur la dernière donnée de chaque série) : « 1 an » = les 12 derniers mois, celui-ci compris.
+function debutPeriodeMacro(){
+  const n=new Date();
+  return fmtYM(new Date(n.getFullYear()-S_macroPeriod,n.getMonth()+1,1));
+}
+function limitMonthlyToPeriod(series,debutYm){
   if(!series||!series.length)return series;
-  // Dernier mois disponible (toutes séries confondues, mais ici par série)
-  const maxYm=series[series.length-1].ym;
-  const maxYear=+maxYm.slice(0,4), maxMonth=+maxYm.slice(5,7);
-  // Borne basse = maxDate - period années
-  let minYear=maxYear-S_macroPeriod;
-  const minYm=String(minYear).padStart(4,'0')+'-'+String(maxMonth).padStart(2,'0');
-  return series.filter(d=>d.ym>=minYm);
+  return series.filter(d=>d.ym>=debutYm);
 }
 
 // Formatte un label YYYY-MM en « janv. 26 »
@@ -3234,6 +4263,12 @@ const _MOIS_FR=['janv.','févr.','mars','avr.','mai','juin','juil.','août','sep
 function fmtYmLabel(ym){
   const y=ym.slice(2,4), m=+ym.slice(5,7);
   return (_MOIS_FR[m-1]||'')+' '+y;
+}
+// v=6 (#42) : le PIB est trimestriel (saisie : d = dernier mois du trimestre) → « T1 2026 »,
+// jamais un mois (« mars 26 » se lisait comme le PIB de mars). Les autres onglets : le mois.
+function fmtPeriodeMacro(ym){
+  if(S_macroTab!=='gdp')return fmtYmLabel(ym);
+  return 'T'+Math.ceil(+ym.slice(5,7)/3)+' '+ym.slice(0,4);
 }
 
 function renderMacroChart(force){
@@ -3251,16 +4286,18 @@ function renderMacroChart(force){
   if(loadEl)loadEl.style.display='none';
   if(titleEl)titleEl.textContent=(tab?tab.label+' — ':'')+sub.label;
   if(descEl)descEl.textContent=sub.desc||'';
-  if(srcEl)srcEl.textContent='Source : Trading Economics · maj '+fmtDateFr(MACRO_DATA_UPDATED);
+  if(srcEl)srcEl.textContent=''; // v=6 : la source n'est citée que s'il y a des chiffres (plus bas)
 
   // Zones à afficher : comparaison ou zone unique
   const zones=S_macroCompare?[...S_macroCompareZones]:[S_macroZone];
 
-  // Récupérer + tronquer à la période choisie
-  const allSeries=zones.map(zc=>({
-    zone:zc,
-    data:limitMonthlyToPeriod(getMacroSeries(zc))
-  }));
+  // Récupérer + tronquer à la période choisie (v=6 #39 : borne commune, datée d'aujourd'hui)
+  const debutYm=debutPeriodeMacro();
+  const saisies=zones.map(zc=>({zone:zc,data:getMacroSeries(zc)}));
+  const allSeries=saisies.map(s=>({zone:s.zone,data:limitMonthlyToPeriod(s.data,debutYm)}));
+  const nomPeriode=S_macroPeriod+(S_macroPeriod>1?' ans':' an');
+  const couvEl=document.getElementById('macro-couverture');
+  if(couvEl)couvEl.textContent='';
 
   const hasData=allSeries.some(s=>s.data.length>0);
   if(!hasData){
@@ -3272,17 +4309,37 @@ function renderMacroChart(force){
       errEl.style.background='rgba(245,166,35,.08)';
       errEl.style.borderColor='var(--amber3)';
       errEl.style.color='var(--amber)';
-      errEl.innerHTML='ℹ Aucune donnée saisie pour <strong>'+esc(sub.label)+'</strong> sur cette zone. '
-        +'Ces données se complètent au fil des mises à jour — demande à Claude « actualise les données macro » pour ajouter les derniers chiffres.';
+      // v=6 (UX-03) : dire ce qui manque, où et dans quel relevé — sans renvoyer
+      // l'utilisateur vers un outil qu'il n'a pas.
+      const nomsZones=zones.map(zc=>MACRO_ZONES.find(z=>z.code===zc)?.name||zc).join(', ');
+      // v=6 (#39) : des valeurs saisies, mais toutes avant la période choisie → le dire
+      // (ce n'est pas « pas de donnée »).
+      const derniere=saisies.filter(s=>s.data.length).map(s=>s.data[s.data.length-1].ym).sort().pop();
+      errEl.innerHTML=derniere
+        ?'ℹ Aucune valeur de <strong>'+esc(sub.label)+'</strong> sur la période choisie ('+esc(nomPeriode)+') — '+esc(nomsZones)
+          +'. Dernière valeur saisie : '+esc(fmtPeriodeMacro(derniere))+'.'
+        :'ℹ Pas de donnée pour <strong>'+esc(sub.label)+'</strong> — '+esc(nomsZones)
+          +' dans le relevé du '+esc(fmtDateFr(MACRO_DATA_UPDATED))+'.';
     }
     return;
+  }
+
+  if(srcEl)srcEl.textContent='Source : Trading Economics · relevé du '+fmtDateFr(MACRO_DATA_UPDATED);
+  // v=6 (#39) : ce que la période couvre VRAIMENT (« 5 ans » ne promet pas 5 ans de chiffres).
+  if(couvEl){
+    const vus=allSeries.flatMap(s=>s.data.map(d=>d.ym)).sort(), n=vus.length;
+    const plusCourt=saisies.every(s=>!s.data.length||s.data[0].ym>debutYm);
+    couvEl.textContent='Sur '+nomPeriode+' : '+(n>1
+      ?n+' valeurs saisies, de '+fmtPeriodeMacro(vus[0])+' à '+fmtPeriodeMacro(vus[n-1])
+      :'1 valeur saisie ('+fmtPeriodeMacro(vus[0])+')')
+      +(plusCourt?' — l\'historique saisi ne couvre pas toute la période.':'.');
   }
 
   // Axe X = union des mois (YYYY-MM) de toutes les séries, trié
   const ymSet=new Set();
   allSeries.forEach(s=>s.data.forEach(d=>ymSet.add(d.ym)));
   const yms=[...ymSet].sort();
-  const labels=yms.map(fmtYmLabel);
+  const labels=yms.map(fmtPeriodeMacro);
 
   // Datasets
   const datasets=allSeries.map((s,i)=>{
@@ -3292,6 +4349,7 @@ function renderMacroChart(force){
     const map={};s.data.forEach(d=>{map[d.ym]=d.value;});
     return {
       label:zoneObj?zoneObj.label+' · '+zoneObj.name:s.zone,
+      zone:s.zone, // v=6 (#44) : devise de l'info-bulle
       data:yms.map(y=>map[y]??null),
       borderColor:color,
       backgroundColor:S_macroChartType==='bar'?color+'cc':color+'22',
@@ -3308,8 +4366,16 @@ function renderMacroChart(force){
   const refSeries=allSeries[0].data;
   if(latestEl&&refSeries.length){
     const last=refSeries[refSeries.length-1];
-    latestEl.textContent='Dernier : '+fmtMacroVal(last.value,sub)+' ('+fmtYmLabel(last.ym)+')';
+    // v=6 : « dernière valeur SAISIE » (pas la dernière publiée), zone nommée en mode Comparer
+    latestEl.textContent='Dernière valeur saisie'+(S_macroCompare?' ('+allSeries[0].zone+')':'')+' : '
+      +fmtMacroVal(last.value,sub,allSeries[0].zone)+' ('+fmtPeriodeMacro(last.ym)+')';
   }else if(latestEl)latestEl.textContent='';
+
+  // v=6 (#44) : solde commercial en milliards de la devise de chaque zone ; plusieurs
+  // devises sur un même axe → le dire (des Mds USD et des Mds JPY ne se comparent pas).
+  const devises=S_macroTab==='trade'?allSeries.filter(s=>s.data.length).map(s=>s.zone):[];
+  const uneDevise=devises.length===1?devises[0]:'';
+  if(descEl&&devises.length>1)descEl.textContent+=' Ici, chaque zone est dans sa propre devise : ces montants ne se comparent pas directement.';
 
   // Render Chart.js
   if(_macroChart){_macroChart.destroy();}
@@ -3328,13 +4394,15 @@ function renderMacroChart(force){
           callbacks:{label:c=>{
             const v=c.parsed.y;
             if(v===null)return c.dataset.label+' : n/d';
-            return c.dataset.label+' : '+fmtMacroVal(v,sub);
+            return c.dataset.label+' : '+fmtMacroVal(v,sub,c.dataset.zone);
           }}
         }
       },
       scales:{
         x:{grid:{color:gc,drawBorder:false},ticks:{color:tc,font:{size:9,family:'Arial'},maxRotation:0,autoSkip:true,maxTicksLimit:16}},
-        y:{grid:{color:gc,drawBorder:false},ticks:{color:tc,font:{size:9,family:'Arial'},callback:v=>v+(sub.unit||'')}}
+        y:{grid:{color:gc,drawBorder:false},
+           ticks:{color:tc,font:{size:9,family:'Arial'},callback:v=>S_macroTab==='trade'?v+' Mds'+(uneDevise?' '+uneDevise:''):v+(sub.unit||'')},
+           title:{display:devises.length>1,text:'Mds, dans la devise de chaque zone (non comparables)',color:tc,font:{size:9,family:'Arial'}}}
       }
     }
   });
@@ -3344,12 +4412,12 @@ function renderMacroChart(force){
     if(!S_macroCompare&&refSeries.length){
       const last12=refSeries.slice(-12).reverse();
       tableWrap.innerHTML=`
-        <div style="font-family:Arial,monospace;font-size:9px;letter-spacing:.1em;color:var(--amber);margin-bottom:8px">HISTORIQUE MENSUEL · ${esc(MACRO_ZONES.find(z=>z.code===S_macroZone)?.name||'')}</div>
+        <div style="font-family:Arial,monospace;font-size:9px;letter-spacing:.1em;color:var(--amber);margin-bottom:8px">HISTORIQUE ${S_macroTab==='gdp'?'TRIMESTRIEL':'MENSUEL'} · ${esc(MACRO_ZONES.find(z=>z.code===S_macroZone)?.name||'')}</div>
         <div style="display:flex;gap:6px;flex-wrap:wrap">
           ${last12.map(d=>`
             <div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:7px 11px;text-align:center;min-width:74px">
-              <div style="font-family:Arial,monospace;font-size:9px;color:var(--text3)">${fmtYmLabel(d.ym)}</div>
-              <div style="font-family:Arial,monospace;font-size:13px;font-weight:700;color:var(--text);margin-top:2px">${fmtMacroVal(d.value,sub)}</div>
+              <div style="font-family:Arial,monospace;font-size:9px;color:var(--text3)">${fmtPeriodeMacro(d.ym)}</div>
+              <div style="font-family:Arial,monospace;font-size:13px;font-weight:700;color:var(--text);margin-top:2px">${fmtMacroVal(d.value,sub,S_macroZone)}</div>
             </div>`).join('')}
         </div>`;
     }else{
@@ -3359,11 +4427,14 @@ function renderMacroChart(force){
 }
 
 // Formatage d'une valeur macro selon son unité
-function fmtMacroVal(v,sub){
+// v=6 (#36) : 2 décimales quand la 2e compte (un taux directeur bouge par 0,25 :
+// 3.75 % et non « 3.8 % », taux qu'aucune banque centrale n'a fixé), sinon 1.
+// v=6 (#44) : `zone` (code ISO de la devise) dit de quels milliards on parle (« Mds USD »).
+function fmtMacroVal(v,sub,zone){
   if(v===null||v===undefined||isNaN(v))return 'n/d';
   const u=sub.unit||'';
-  if(u==='%')return (v>0&&(S_macroTab==='trade')? '+':'')+v.toFixed(1)+' %';
-  if(S_macroTab==='trade')return (v>=0?'+':'')+v.toFixed(1)+' Mds';
+  if(u==='%'){const s=v.toFixed(2);return (s.endsWith('0')?v.toFixed(1):s)+' %';}
+  if(S_macroTab==='trade')return (v>=0?'+':'')+v.toFixed(1)+' Mds'+(zone?' '+zone:'');
   if(S_macroTab==='pmi')return v.toFixed(1);
   return v.toFixed(1)+(u?' '+u:'');
 }
@@ -3373,10 +4444,17 @@ function fmtDateFr(ymd){
   return d+'/'+m+'/'+y;
 }
 
-function buildRptMonthBar(){
+// v=6 (revue) : bouton de mois surligné = mois affiché (aucun s'il n'est pas parmi les 3).
+function activerMois(mois){
+  Array.from(document.getElementById('rpt-month-btns')?.children||[]).forEach(b=>b.classList.toggle('active',b.dataset.month===mois));
+}
+// Liste des 18 derniers mois et 3 boutons, à partir du mois du jour (sans toucher à la
+// semaine affichée). v=6 (revue) : reconstruite aussi quand la page reste ouverte d'un
+// mois sur l'autre, sinon le nouveau mois n'est proposé nulle part.
+function construireBarreMois(){
   const pick=document.getElementById('rpt-month-pick');
   const btnsEl=document.getElementById('rpt-month-btns');
-  if(!pick||!btnsEl)return;
+  if(!pick||!btnsEl)return false;
   const now=new Date();
   pick.innerHTML='<option value="">Autre mois…</option>';
   for(let i=0;i<18;i++){
@@ -3399,7 +4477,13 @@ function buildRptMonthBar(){
     btn.addEventListener('click',()=>switchRptMonth(val,btn));
     btnsEl.appendChild(btn);
   }
+  return true;
+}
+function buildRptMonthBar(){
+  if(!construireBarreMois())return;
+  const pick=document.getElementById('rpt-month-pick');
   initCurrencyWeek();
+  activerMois(S_rptMonth); // v=6 (AJOUT 1)
   // V9.10 — Le dropdown affiche le mois courant par défaut (au lieu de "Autre mois…")
   if(pick)pick.value=S_rptMonth;
   buildWeeksForMonth(S_rptMonth);
@@ -3455,7 +4539,8 @@ function buildWeeksForMonth(monthVal){
     wBtns.appendChild(btn);
     if(isSelected)autoSelect=val;
   });
-  if(!autoSelect&&mondays.length){
+  // v=6 (AJOUT 1) : jamais une autre semaine que celle du champ en surbrillance
+  if(!autoSelect&&!currentWeek&&mondays.length){
     const lastBtn=wBtns.lastElementChild;if(lastBtn)lastBtn.classList.add('active');
     autoSelect=fmtYMD(mondays[mondays.length-1]);
   }
@@ -3464,19 +4549,57 @@ function buildWeeksForMonth(monthVal){
   }
 }
 
-async function selectWeek(val,btn){
+// Bouton de semaine en surbrillance = la semaine demandée (aucun si elle n'est pas listée).
+function activerSemaine(val){
+  const el=document.getElementById('rpt-week-btns');if(!el)return;
+  Array.from(el.children||[]).forEach(b=>b.classList.toggle('active',b.dataset.week===val));
+}
+async function selectWeek(val,btn,abandon){
   // V9.1 FIX : on persiste en base AVANT de changer de semaine
-  await flushAndSaveBeforeSwitch();
-  document.querySelectorAll('#rpt-week-btns .acc-tab').forEach(b=>b.classList.remove('active'));
-  if(btn)btn.classList.add('active');
+  // v=6 (constat 49) : et on ne change QUE si c'est écrit (sinon on le demande)
+  if(!abandon&&!(await flushAndSaveBeforeSwitch())){proposerAbandon(()=>selectWeek(val,btn,true));return;}
+  S._rptSemaineChoisie=true;
+  activerSemaine(val);
   const wd=document.getElementById('rpt-week');if(wd)wd.value=val;
-  await loadCurrencyReport();
+  await chargerRapport();
 }
-async function onWeekDateChange(){
-  await flushAndSaveBeforeSwitch();
-  document.querySelectorAll('#rpt-week-btns .acc-tab').forEach(b=>b.classList.remove('active'));
-  await loadCurrencyReport();
+async function onWeekDateChange(abandon){
+  const wd=document.getElementById('rpt-week');if(!wd)return;
+  const voulu=wd.value;
+  // v=6 (constat 49) : le champ porte DÉJÀ la nouvelle date ; la saisie en cours
+  // part dans la semaine chargée, et un échec remet la date de cette semaine.
+  if(!abandon&&!(await flushAndSaveBeforeSwitch())){
+    wd.value=S._rptSemaine||'';
+    proposerAbandon(()=>{wd.value=voulu;onWeekDateChange(true);});
+    return;
+  }
+  if(!voulu){wd.value=S._rptSemaine||'';return;} // champ vidé : on reste sur la semaine affichée
+  // v=6 (constat 57) : un rapport couvre la semaine du LUNDI au dimanche ; un autre
+  // jour ouvrait un rapport distinct, vide en apparence et invisible depuis les
+  // boutons. On ramène au lundi, et on le dit (la date choisie est modifiée).
+  const lundi=lundiDe(voulu);
+  S._rptSemaineChoisie=true;
+  // v=6 (vérifié en base le 11/11/2026 : d'anciens rapports sont datés d'un dimanche ou
+  // d'un samedi, ancien calcul de date en UTC) : un rapport enregistré EXACTEMENT à la
+  // date choisie s'ouvre tel quel, avec un avertissement, au lieu de devenir inaccessible.
+  let cible=lundi;
+  if(lundi!==voulu){
+    let ancien=null;
+    try{const{data,error}=await sb.from('currency_reports').select('id').eq('week_start',voulu).eq('workspace_id',S.currentWorkspaceId||S.workspaceId).maybeSingle();if(!error)ancien=data;}catch(_){}
+    if(ancien){cible=voulu;toast('Ancien rapport enregistré sous le '+jourMois(voulu)+' (pas un lundi) : distinct de celui de la semaine du lundi '+jourMois(lundi)+'.','err');}
+    else{wd.value=lundi;toast('Semaine du lundi '+jourMois(lundi)+' : un rapport couvre la semaine du lundi au dimanche','ok');}
+  }
+  const mois=cible.slice(0,7);
+  if(mois!==S_rptMonth){
+    S_rptMonth=mois;
+    const mp=document.getElementById('rpt-month-pick');if(mp)mp.value=mois;
+    activerMois(mois); // v=6 (revue) : le bouton de l'ancien mois ne reste pas surligné
+    buildWeeksForMonth(mois);
+  }
+  activerSemaine(cible);
+  await chargerRapport();
 }
+function lundiDe(ymd){const d=dateLocale(ymd);d.setDate(d.getDate()-((d.getDay()+6)%7));return fmtYMD(d);}
 
 function buildRptCurrencyBar(){
   const el=document.getElementById('rpt-cur-btns');if(!el)return;
@@ -3525,15 +4648,23 @@ function refreshCurrencyBtnColors(){
   });
 }
 
-async function switchRptMonth(val,btn){
+async function switchRptMonth(val,btn,abandon){
   if(!val)return;
+  const mp=document.getElementById('rpt-month-pick');
   // V9.1 FIX : on persiste en base AVANT de changer de mois
-  await flushAndSaveBeforeSwitch();
+  // v=6 (constat 49) : et on ne change QUE si c'est écrit (la liste, qui porte
+  // déjà le mois choisi, reprend le mois affiché)
+  if(!abandon&&!(await flushAndSaveBeforeSwitch())){
+    if(mp)mp.value=S_rptMonth;
+    proposerAbandon(()=>switchRptMonth(val,btn,true));
+    return;
+  }
+  S._rptSemaineChoisie=true;
   S_rptMonth=val;
   document.querySelectorAll('#rpt-month-btns .acc-tab').forEach(b=>b.classList.remove('active'));
   if(btn)btn.classList.add('active');
   // V9.10 — Le dropdown reste sur le mois choisi (avant : reset à vide)
-  const mp=document.getElementById('rpt-month-pick');if(mp)mp.value=val;
+  if(mp)mp.value=val;
   const wd=document.getElementById('rpt-week');if(wd)wd.value='';
   buildWeeksForMonth(val);
   const[yr,mo]=val.split('-').map(Number);
@@ -3547,15 +4678,29 @@ async function switchRptMonth(val,btn){
   const targetMonday=found||mondays[mondays.length-1]||mondays[0];
   if(targetMonday&&wd)wd.value=fmtYMD(targetMonday);
   const targetVal=targetMonday?fmtYMD(targetMonday):null;
-  if(targetVal){
-    document.querySelectorAll('#rpt-week-btns .acc-tab').forEach(b=>{
-      if(b.dataset.week===targetVal)b.classList.add('active');else b.classList.remove('active');
-    });
-  }
-  await loadCurrencyReport();
+  if(targetVal)activerSemaine(targetVal);
+  await chargerRapport();
 }
 
+// v=6 (constat 50) : tant que la semaine n'est pas lue, pas de formulaire — une
+// saisie partirait sur un rapport inconnu et écraserait l'existant. Un échec de
+// lecture le dit (jamais une semaine vide), avec « Réessayer ».
+function rapportIndisponible(){
+  if(S._rptCharge!==false)return false;
+  const view=document.getElementById('cur-single-view');
+  if(view){
+    const sem=S._rptSemaine?' de la semaine du '+jourMois(S._rptSemaine):'';
+    view.innerHTML=S._rptErreur
+      ?`<div class="empty"><h3 style="color:var(--red)">Impossible de charger le rapport${esc(sem)}</h3>
+        <p>Rien n'est affiché ni modifiable tant qu'il n'est pas chargé : ce qui est en base reste intact.</p>
+        <p style="margin:6px 0 12px">Détail : ${esc(S._rptErreur)}</p>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="chargerRapport()">↻ Réessayer</button></div>`
+      :`<div class="loading"><div class="spin"></div><br><br>Chargement du rapport${esc(sem)}…</div>`;
+  }
+  return true;
+}
 function renderCurrencyView(){
+  if(rapportIndisponible())return;
   // V9.10 — Onglet spécial BILAN : 3 zones de capture + 1 zone texte
   if(S_curCode==='BILAN'){renderBilanView();return;}
   const cur=CURRENCIES.find(c=>c.code===S_curCode)||CURRENCIES[0];
@@ -3606,7 +4751,7 @@ function renderCurrencyView(){
           onclick="focusCurZone('${code}','pm');document.getElementById('cup-pm-${code}').click()">
           <input type="file" id="cup-pm-${code}" accept="image/*" style="display:none" onchange="handleCurFile(this,'${code}','pm')">
           <button class="cur-paste-rm" id="cprm-pm-${code}" type="button" onclick="event.stopPropagation();clearCurImg('${code}','pm')">✕ Supprimer</button>
-          <img class="cur-paste-img" id="cpimg-pm-${code}" src="" style="display:none" onclick="event.stopPropagation();bigImg(this.src)">
+          <img class="cur-paste-img" id="cpimg-pm-${code}" src="" style="display:none" onerror="captureIndisponible(this)" onclick="event.stopPropagation();bigImg(this.src)">
           <div class="cur-paste-hint-v2" id="cphint-pm-${code}">
             <div class="icon">📊</div>
             <div class="txt">📋 Ctrl+V · Cliquer · Glisser<br><span style="font-size:9px;opacity:.7">Taux directeurs, attentes BCE/Fed…</span></div>
@@ -3622,7 +4767,7 @@ function renderCurrencyView(){
           onclick="focusCurZone('${code}','gh');document.getElementById('cup-gh-${code}').click()">
           <input type="file" id="cup-gh-${code}" accept="image/*" style="display:none" onchange="handleCurFile(this,'${code}','gh')">
           <button class="cur-paste-rm" id="cprm-gh-${code}" type="button" onclick="event.stopPropagation();clearCurImg('${code}','gh')">✕ Supprimer</button>
-          <img class="cur-paste-img" id="cpimg-gh-${code}" src="" style="display:none" onclick="event.stopPropagation();bigImg(this.src)">
+          <img class="cur-paste-img" id="cpimg-gh-${code}" src="" style="display:none" onerror="captureIndisponible(this)" onclick="event.stopPropagation();bigImg(this.src)">
           <div class="cur-paste-hint-v2" id="cphint-gh-${code}">
             <div class="icon">📈</div>
             <div class="txt">📋 Ctrl+V · Cliquer · Glisser<br><span style="font-size:9px;opacity:.7">Chart TradingView hebdomadaire…</span></div>
@@ -3632,20 +4777,7 @@ function renderCurrencyView(){
     </div>
   </div>`;
 
-  if(window._curImgCache){
-    for(const zone of['pm','gh']){
-      const cached=window._curImgCache[zone+'-'+code];
-      const src=cached?.url||cached;
-      if(src){
-        const imgEl=document.getElementById('cpimg-'+zone+'-'+code);
-        const hintEl=document.getElementById('cphint-'+zone+'-'+code);
-        const zoneEl=document.getElementById('cpz-'+zone+'-'+code);
-        if(imgEl){imgEl.src=src;imgEl.style.display='block';}
-        if(hintEl)hintEl.style.display='none';
-        if(zoneEl)zoneEl.classList.add('has-img');
-      }
-    }
-  }
+  afficherCaptures(code,['pm','gh']); // v=6 (AJOUT 7) : liens périmés renouvelés avant affichage
   setTimeout(()=>{initDraggableCurPanel();}, 50);
 }
 
@@ -3658,6 +4790,7 @@ const BILAN_ZONES=[
   {key:'fng', title:'Fear and Greed Index',           icon:'🌡️', hint:'Indice peur/avidité CNN…'},
 ];
 function renderBilanView(){
+  if(rapportIndisponible())return;
   const code='BILAN';
   const view=document.getElementById('cur-single-view');if(!view)return;
   const notesVal=window._curNotesCache?.[code]||'';
@@ -3674,7 +4807,7 @@ function renderBilanView(){
           onclick="focusCurZone('${code}','${z.key}');document.getElementById('cup-${z.key}-${code}').click()">
           <input type="file" id="cup-${z.key}-${code}" accept="image/*" style="display:none" onchange="handleCurFile(this,'${code}','${z.key}')">
           <button class="cur-paste-rm" id="cprm-${z.key}-${code}" type="button" onclick="event.stopPropagation();clearCurImg('${code}','${z.key}')">✕ Supprimer</button>
-          <img class="cur-paste-img" id="cpimg-${z.key}-${code}" src="" style="display:none" onclick="event.stopPropagation();bigImg(this.src)">
+          <img class="cur-paste-img" id="cpimg-${z.key}-${code}" src="" style="display:none" onerror="captureIndisponible(this)" onclick="event.stopPropagation();bigImg(this.src)">
           <div class="cur-paste-hint-v2" id="cphint-${z.key}-${code}">
             <div class="icon">${z.icon}</div>
             <div class="txt">📋 Ctrl+V · Cliquer · Glisser<br><span style="font-size:9px;opacity:.7">${z.hint}</span></div>
@@ -3699,21 +4832,8 @@ function renderBilanView(){
     </div>
   </div>`;
 
-  // Restaurer les images en cache
-  if(window._curImgCache){
-    for(const z of BILAN_ZONES){
-      const cached=window._curImgCache[z.key+'-'+code];
-      const src=cached?.url||cached;
-      if(src){
-        const imgEl=document.getElementById('cpimg-'+z.key+'-'+code);
-        const hintEl=document.getElementById('cphint-'+z.key+'-'+code);
-        const zoneEl=document.getElementById('cpz-'+z.key+'-'+code);
-        if(imgEl){imgEl.src=src;imgEl.style.display='block';}
-        if(hintEl)hintEl.style.display='none';
-        if(zoneEl)zoneEl.classList.add('has-img');
-      }
-    }
-  }
+  // Restaurer les images en cache (v=6, AJOUT 7 : liens périmés renouvelés avant affichage)
+  afficherCaptures(code,BILAN_ZONES.map(z=>z.key));
 }
 
 function updateBiasCache(code,sel){
@@ -3760,23 +4880,55 @@ function initDraggableCurPanel(){
 
 // ─── AUTO-SAVE ───
 let _autoSaveTimer=null;
+let _masqueIndicateur=null;
+// v=6 (constat 48) : seul retour d'enregistrement des Rapports (pas de bouton).
+// « ✓ Sauvegardé » s'efface au bout de 3 s ; un échec reste affiché, en rouge,
+// jusqu'au prochain succès, et se clique pour réessayer.
+function afficherSauvegarde(etat){
+  const ind=document.getElementById('autosave-indicator');if(!ind)return;
+  clearTimeout(_masqueIndicateur);
+  ind.onclick=null;ind.title='';
+  if(etat==='cours'){ind.textContent='● En cours…';ind.className='saving';}
+  else if(etat==='ok'){
+    ind.textContent='✓ Sauvegardé';ind.className='saved';
+    _masqueIndicateur=setTimeout(()=>{if(ind.className==='saved')ind.className='';},3000);
+  }else if(etat==='erreur'){
+    ind.textContent='✗ Non enregistré — réessayer';ind.className='error';
+    ind.title='Ta dernière saisie n\'est pas en base. Cliquer pour réessayer.';
+    ind.onclick=()=>saveCurrencyReportAuto();
+  }else ind.className='';
+}
+// v=6 (constat 59) : +1 à chaque frappe et à chaque enregistrement lancé.
+let _autoSaveGen=0;
 function scheduleAutoSave(){
   flushCurrentViewToCache();
-  const ind=document.getElementById('autosave-indicator');
-  if(ind){ind.textContent='● En cours…';ind.className='saving';}
+  _autoSaveGen++;
+  afficherSauvegarde('cours');
   clearTimeout(_autoSaveTimer);
   // V9.3 : délai réduit de 2s à 1s pour une sauvegarde plus réactive
   _autoSaveTimer=setTimeout(async()=>{
     await saveCurrencyReportAuto();
   },1000);
 }
+// v=6 (constat 59) : seul le DERNIER enregistrement lancé, sans frappe plus
+// récente, affiche son résultat — la fin d'un enregistrement ancien ne dit plus
+// « ✓ Sauvegardé » pendant que les derniers mots attendent encore.
+// v=6 (constat 48) : fermer ou recharger la page alors que l'indicateur dit
+// « En cours… » ou « Non enregistré » → le navigateur demande confirmation (sa
+// propre phrase). L'indicateur ne reflète que les saisies de cet écran.
+function avantFermeture(e){
+  const etat=document.getElementById('autosave-indicator')?.className;
+  if(etat==='saving'||etat==='error'){e.preventDefault();e.returnValue='';}
+}
+window.addEventListener('beforeunload',avantFermeture);
 async function saveCurrencyReportAuto(){
-  const ind=document.getElementById('autosave-indicator');
+  const g=++_autoSaveGen,r=S._rptGen; // r : la semaine affichée au départ
+  afficherSauvegarde('cours');
   try{
     await saveCurrencyReport(true);
-    if(ind){ind.textContent='✓ Sauvegardé';ind.className='saved';setTimeout(()=>{ind.className='';},3000);}
+    if(g===_autoSaveGen&&r===S._rptGen)afficherSauvegarde('ok');
   }catch(e){
-    if(ind){ind.textContent='✗ Erreur';ind.className='saving';setTimeout(()=>{ind.className='';},3000);}
+    if(g===_autoSaveGen&&r===S._rptGen)afficherSauvegarde('erreur');
   }
 }
 
@@ -3801,18 +4953,27 @@ async function loadAdminUsers() {
     tbody.innerHTML = '';
     data.forEach(u => {
       const tr = document.createElement('tr');
+      // v=6 (constat 71) : un inscrit sans espace ne peut pas entrer (postLogin le
+      // renvoie au formulaire) : « Bloqué : aucun espace », jamais « Actif ».
+      const sansEspace = !u.workspace_name;
       const status = !u.auth_user_id
         ? '<span class="admin-status-pill pending">En attente d\'inscription</span>'
-        : (u.is_super_admin_user
-            ? '<span class="admin-status-pill admin">Super Admin</span>'
-            : '<span class="admin-status-pill active">Actif</span>');
+        : sansEspace
+          ? '<span class="admin-status-pill bloque">Bloqué : aucun espace' + (u.is_super_admin_user ? ' · super admin' : '') + '</span>'
+          : (u.is_super_admin_user
+              ? '<span class="admin-status-pill admin">Super Admin</span>'
+              : '<span class="admin-status-pill active">Actif</span>');
       const last = u.last_sign_in_at ? fDate(u.last_sign_in_at) : '—';
       const wsLabel = u.workspace_name
         ? `<span class="workspace-pill ${u.workspace_is_shared ? 'shared' : ''}">${esc(u.workspace_name)}${u.workspace_is_shared ? ' · 👥' : ' · 🔒'}</span>`
         : '<span style="color:var(--text3);font-size:9px">—</span>';
       const canDelete = !u.is_super_admin_user;
+      // v=6 (constat 70) : libellé selon l'état réel, un vrai booléen dans l'appel
+      // (avant : « 🗑 Retirer » partout, et l'UUID du compte passé comme drapeau).
       const actions = canDelete
-        ? `<button class="btn btn-red btn-sm" onclick="adminRemove(${escJs(u.email)}, ${u.auth_user_id ? `'${u.auth_user_id}'` : 'null'})">🗑 Retirer</button>`
+        ? (u.auth_user_id
+            ? `<button class="btn btn-red btn-sm" onclick="adminRemove(${escJs(u.email)}, true)">🚫 Retirer l'accès</button>`
+            : `<button class="btn btn-ghost btn-sm" onclick="adminRemove(${escJs(u.email)}, false)">✕ Annuler l'invitation</button>`)
         : '<span style="color:var(--text3);font-size:9px">Protégé</span>';
       tr.innerHTML = `
         <td><span style="font-family:Arial,monospace;font-size:10px">${esc(u.email)}</span>${u.profile_name ? `<div style="font-size:9px;color:var(--text3);margin-top:2px">${esc(u.profile_name)}</div>` : ''}</td>
@@ -3856,26 +5017,32 @@ async function adminAddEmail() {
     emailEl.value = ''; noteEl.value = '';
     document.getElementById('ws-new').checked = true;
     onWorkspaceChoiceChange();
-    await loadAdminUsers();
-    await loadAdminWorkspaces();
   } catch (e) {
-    toast('Erreur : ' + (e.message || ''), 'err');
+    const cause = messageErreur(e);
+    toast('Email non ajouté : ' + (e?.code === '23505' ? 'cet email est déjà dans la liste' : cause) + '.', 'err');
+    return;
   }
+  await rafraichirAdmin(); // hors du try : un ajout réussi n'est jamais annoncé « non ajouté »
 }
 
-function adminRemove(email,deleteAuth){
+// v=6 (constat 70) : deux actions, chacune décrite telle qu'elle est (avant : « son
+// compte reste sauvegardé » pour une personne sans compte, et pour un inscrit la
+// seule « Suppression définitive », envoyée avec l'UUID au lieu d'un booléen).
+// p_delete_auth vaut toujours false : la suppression définitive d'un compte n'est
+// plus proposée tant que l'effet réel de p_delete_auth=true n'est pas relu en base.
+function adminRemove(email,inscrit){
   if(!S.isSuperAdmin)return;
-  const msg=deleteAuth
-    ?`Supprimer définitivement le compte de ${email} ? La personne perdra immédiatement l'accès. Cette action est IRRÉVERSIBLE.`
-    :`Retirer ${email} de la whitelist ? La personne ne pourra plus se connecter mais son compte reste sauvegardé.`;
-  showConfirm(deleteAuth?'⚠ Suppression définitive':'Retirer de la whitelist',msg,async()=>{
+  const msg=inscrit
+    ?`Retirer l'accès de ${email} ? Son email est retiré de la liste blanche : la personne perd l'accès à l'application. Son compte n'est pas supprimé.`
+    :`Annuler l'invitation de ${email} ? Aucun compte n'a encore été créé ; cette adresse n'est plus autorisée à s'inscrire.`;
+  showConfirm(inscrit?'Retirer l\'accès':'Annuler l\'invitation',msg,async()=>{
     try{
-      const{error}=await sb.rpc('admin_remove_email',{p_email:email,p_delete_auth:deleteAuth});
+      const{error}=await sb.rpc('admin_remove_email',{p_email:email,p_delete_auth:false});
       if(error)throw error;
-      toast(deleteAuth?'Compte supprimé':'Email retiré','ok');
-      await loadAdminUsers();
-    }catch(e){toast('Erreur : '+e.message,'err');}
-  },deleteAuth?'SUPPRIMER':'RETIRER');
+      toast((inscrit?'Accès retiré : ':'Invitation annulée : ')+email,'ok');
+    }catch(e){toast((inscrit?'Accès non retiré : ':'Invitation non annulée : ')+messageErreur(e)+'.','err');return;}
+    await rafraichirAdmin();
+  },inscrit?'RETIRER L\'ACCÈS':'ANNULER L\'INVITATION');
 }
 
 

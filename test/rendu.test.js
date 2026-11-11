@@ -94,7 +94,7 @@ test('macro : graphique et historique', () => {
 test('calendrier : barres de zones et de periodes', () => {
   const ctx = charger();
   ctx.loadCalendar();
-  assert.equal(ctx.__el('cal-zone-btns').children.length, 10);
+  assert.equal(ctx.__el('cal-zone-btns').children.length, 9); // v=6 (#38) : XAU retire (identique a « All »)
   assert.equal(ctx.__el('cal-period-btns').children.length, 3);
 });
 
@@ -125,6 +125,6 @@ test('bandeau d espace : mode consultation', () => {
   Object.assign(S, { workspaceId: 'w-maison', currentWorkspaceId: 'w-vue', workspace: { name: 'Maison' }, currentWorkspace: { name: 'Vue <i>x</i>' } });
   ctx.updateWorkspaceBanner();
   const html = ctx.__el('ws-context-msg').innerHTML;
-  assert.match(html, /Mode consultation/);
+  assert.match(html, /Vue d'un autre espace/); // v=6 (constat 68) : « Mode consultation » taisait les écritures
   assert.ok(!html.includes('<i>x</i>'), 'nom d espace echappe');
 });

@@ -77,13 +77,15 @@ function faireDb({ reponses = {}, appels = [] } = {}) {
     const p = new Proxy(function () {}, {
       get(_, k) {
         if (k === 'then') {
-          if (etat.op !== 'select') appels.push({ table: nom, op: etat.op, charge: etat.charge, filtres: etat.filtres });
+          if (etat.op !== 'select') appels.push({ table: nom, op: etat.op, charge: etat.charge, filtres: etat.filtres, options: etat.options });
           const r = reponses[nom];
           const rep = typeof r === 'function' ? r(etat) : (r || { data: [], error: null });
           return (ok, ko) => Promise.resolve(rep).then(ok, ko);
         }
         if (['insert', 'update', 'delete', 'upsert'].includes(k)) {
-          return (charge) => { etat.op = k; etat.charge = charge; return p; };
+          // options : 2e argument d'insert/update/upsert (ex. {count:'exact'}) ; pour delete,
+          // les options sont le 1er argument (donc dans charge).
+          return (charge, options) => { etat.op = k; etat.charge = charge; etat.options = options; return p; };
         }
         if (['eq', 'neq', 'in', 'gt', 'lt', 'gte', 'lte', 'is'].includes(k)) {
           return (c, v) => { etat.filtres.push([k, c, v]); return p; };
@@ -155,7 +157,7 @@ ChartFactice.instances = [];
 // muet : la console de l'app est capturee dans ctx.__console (un test qui passe
 // n'affiche pas d'erreur attendue). minuteriesImmediates : setTimeout s'execute
 // au tour suivant (sinon il ne s'execute jamais).
-function charger({ maintenant, db, html = SOURCE_HTML, source = SOURCE_APP, sansChart = false, muet = false, minuteriesImmediates = false } = {}) {
+function charger({ maintenant, db, html = SOURCE_HTML, source = SOURCE_APP, sansChart = false, muet = false, minuteriesImmediates = false, session } = {}) {
   const D = Date;
   const DateFigee = maintenant
     ? new Proxy(D, {
@@ -183,11 +185,14 @@ function charger({ maintenant, db, html = SOURCE_HTML, source = SOURCE_APP, sans
     addEventListener() {}, removeEventListener() {},
     execCommand() { return true; }, queryCommandState() { return false; },
   };
-  const memoire = new Map();
-  const localStorage = {
-    getItem: (k) => (memoire.has(k) ? memoire.get(k) : null),
-    setItem: (k, v) => memoire.set(k, String(v)), removeItem: (k) => memoire.delete(k),
-  };
+  const stockage = (m) => ({
+    getItem: (k) => (m.has(k) ? m.get(k) : null),
+    setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k),
+  });
+  const localStorage = stockage(new Map());
+  // sessionStorage : survit au « rechargement » qu'un test simule en rechargeant
+  // app.js avec charger({ session: ctx.sessionStorage }).
+  const sessionStorage = session || stockage(new Map());
   const client = db || faireDb();
   const journal = [];
   const consoleMuette = Object.fromEntries(['log', 'info', 'warn', 'error', 'debug'].map((n) => [n, (...a) => journal.push([n, ...a])]));
@@ -196,7 +201,7 @@ function charger({ maintenant, db, html = SOURCE_HTML, source = SOURCE_APP, sans
     setTimeout: minuteriesImmediates ? (f) => { setImmediate(f); return 1; } : () => 0,
     clearTimeout() {}, setInterval: () => 0, clearInterval() {},
     queueMicrotask,
-    document, localStorage,
+    document, localStorage, sessionStorage,
     location: { href: 'https://exemple.invalid/tracktrading/', hash: '', search: '', origin: 'https://exemple.invalid', pathname: '/tracktrading/', reload() {} },
     navigator: { userAgent: 'test' },
     supabase: { createClient: () => client },

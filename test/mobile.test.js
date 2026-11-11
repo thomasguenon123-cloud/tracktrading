@@ -8,7 +8,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { RACINE, SOURCE_HTML } = require('./charger-app.js');
+const { RACINE, SOURCE_HTML, charger } = require('./charger-app.js');
 
 const CSS = fs.readFileSync(path.join(RACINE, 'styles.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
 
@@ -89,4 +89,13 @@ test('« Supprimer » une capture : visible sans survol (tactile)', () => {
   assert.equal(valeur(b, '.cur-paste-zone-v2.has-img .cur-paste-rm', 'display'), 'block');
   // témoin : sur bureau, le bouton reste discret (au survol)
   assert.equal(valeur(CSS, '.cur-paste-zone-v2 .cur-paste-rm', 'display'), 'none');
+});
+
+// v=6 : le fichier joint d'un trade (PDF…) est devenu un lien ouvrable (constat 31) ;
+// mesuré au banc : 44×11 px au doigt sans règle tactile.
+test('tactile : le lien d un fichier joint est une cible d au moins 40 px', () => {
+  const html = charger().fichierHTML({ filename: 'releve.pdf' }, 'https://exemple.invalid/signe/releve.pdf');
+  assert.match(html, /<a [^>]*class="lien-fichier"[^>]*>releve\.pdf<\/a>/, 'témoin : le lien est rendu, avec sa classe');
+  const b = blocsMedia('(pointer:coarse)');
+  assert.ok(parseFloat(valeur(b, '.lien-fichier', 'min-height')) >= 40, '.lien-fichier : min-height >= 40px');
 });

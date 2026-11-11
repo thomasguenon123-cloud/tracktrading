@@ -463,6 +463,8 @@ html.demarrage .auth-card{display:none;}
 .admin-status-pill.pending{background:rgba(240,192,64,.15);color:var(--yellow);border:1px solid rgba(240,192,64,.4);}
 .admin-status-pill.active{background:rgba(0,214,143,.15);color:var(--green);border:1px solid rgba(0,214,143,.4);}
 .admin-status-pill.admin{background:rgba(155,140,255,.15);color:var(--purple);border:1px solid rgba(155,140,255,.4);}
+/* v=6 (constat 71) : inscrit sans espace, qui ne peut pas entrer */
+.admin-status-pill.bloque{background:rgba(255,77,106,.15);color:var(--red);border:1px solid rgba(255,77,106,.4);}
 .admin-add-row{
   display:flex;gap:8px;margin:12px 14px;align-items:center;flex-wrap:wrap;
 }
@@ -690,8 +692,10 @@ html.demarrage .auth-card{display:none;}
 }
 #presence-indicator.visible{opacity:1;transform:translateY(0);}
 
+/* v=6 (constat 63) : au-dessus de la zone des toasts (jusqu'à 4 lignes sur
+   téléphone) et de la présence — avant, un toast le couvrait à 81 %. */
 #autosave-indicator{
-  position:fixed;bottom:14px;right:14px;z-index:9998;
+  position:fixed;bottom:88px;right:14px;z-index:9998;
   background:var(--bg3);border:1px solid var(--border2);
   border-radius:3px;padding:5px 10px;
   font-family:Arial,monospace;font-size:10px;color:var(--text3);
@@ -700,6 +704,8 @@ html.demarrage .auth-card{display:none;}
 }
 #autosave-indicator.saving{opacity:1;color:var(--amber);border-color:var(--amber);}
 #autosave-indicator.saved{opacity:1;color:var(--green);border-color:var(--green2);}
+/* v=6 (constat 48) : un échec reste affiché, en rouge, et se clique pour réessayer */
+#autosave-indicator.error{opacity:1;color:var(--red);border-color:var(--red);pointer-events:auto;cursor:pointer;}
 
 .bias-sel{background:var(--bg3);border:1px solid var(--border);color:var(--text2);padding:2px 6px;border-radius:2px;font-size:10px;font-family:Arial,monospace;}
 .bias-badge{display:inline-flex;align-items:center;gap:4px;border-radius:2px;padding:2px 8px;font-size:9px;font-family:Arial,monospace;margin-bottom:6px;border:1px solid;}
@@ -794,6 +800,8 @@ textarea,.f-inp{
 }
 textarea{resize:vertical;}
 textarea:focus,.f-inp:focus{outline:none;border-color:var(--amber);}
+/* v=6 (AJOUT 4) : un texte indicatif ne se lit pas comme une valeur saisie */
+.f-inp::placeholder,textarea::placeholder{color:var(--text3);font-style:italic;opacity:1;}
 .f-select{
   background:var(--bg3);border:1px solid var(--border2);color:var(--text2);
   padding:6px 8px;border-radius:2px;font-size:11px;font-family:inherit;width:100%;
@@ -852,10 +860,14 @@ textarea:focus,.f-inp:focus{outline:none;border-color:var(--amber);}
 .empty{text-align:center;padding:40px;color:var(--text3);}
 .empty h3{font-size:13px;color:var(--text2);margin-bottom:5px;font-weight:600;}
 .empty p{font-size:11px;font-family:Arial,monospace;}
+/* v=6 (constat 3) : trades non chargés → aucun graphique (vide ou ancien) à la place */
+#dash-main.trades-indisponibles .chart-panel>:not(.chart-hdr){visibility:hidden;}
 #toast{position:fixed;bottom:18px;right:18px;z-index:9999;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--radius);padding:8px 14px;font-size:11px;font-family:Arial,monospace;transform:translateY(20px);opacity:0;transition:all .3s;pointer-events:none;}
 #toast.show{transform:translateY(0);opacity:1;}
 #toast.ok{border-color:var(--amber);color:var(--amber);}
 #toast.err{border-color:var(--red);color:var(--red);}
+/* v=6 (constat 69) : un avertissement affiché se ferme au clic (8 s sinon) */
+#toast.show.err{pointer-events:auto;cursor:pointer;}
 .spin{display:inline-block;width:10px;height:10px;border:2px solid var(--border2);border-top-color:var(--amber);border-radius:50%;animation:sp .6s linear infinite;}
 @keyframes sp{to{transform:rotate(360deg)}}
 .chip-row{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px;}
@@ -926,6 +938,10 @@ body.dash-dragging-h{cursor:row-resize !important;user-select:none;-webkit-user-
 #cal-content{width:100%;height:calc(100vh - 158px - var(--hdr-extra));position:relative;}
 #macro-content{padding:18px 20px;overflow-y:auto;height:calc(100vh - 210px - var(--hdr-extra));}
 .barre-outils-droite{margin-left:auto;display:flex;align-items:center;gap:10px;}
+/* v=6 (UX-03) : relevé macro ancien — dit clairement que les chiffres ne bougent pas */
+.macro-fraicheur{margin:10px 14px 0;padding:9px 12px;border:1px solid var(--amber3);border-left:3px solid var(--amber);
+  border-radius:var(--radius);background:rgba(245,166,35,.08);color:var(--amber);font-size:11px;line-height:1.5;}
+.macro-fraicheur[hidden]{display:none;}
 .cal-day-group{margin-bottom:16px;}
 .cal-day-header{
   font-family:Arial,monospace;font-size:9px;letter-spacing:.14em;text-transform:uppercase;
@@ -1229,6 +1245,7 @@ html{-webkit-text-size-adjust:100%;text-size-adjust:100%;}
   .btn{min-width:40px;justify-content:center;}
   .hdr-btn,.modal-close,.tjp-fermer{min-width:40px;min-height:40px;}
   #cal-tz-hint a{display:inline-flex;align-items:center;min-height:40px;}
+  .lien-fichier{display:inline-flex;align-items:center;min-height:40px;} /* v=6 : fichier joint d'un trade, lien ouvrable */
   .workspace-radio-row label{display:inline-flex;align-items:center;min-height:40px;}
   .workspace-radio-row input[type="radio"]{width:20px;height:20px;}
   #format-toolbar button{width:40px;height:40px;}
